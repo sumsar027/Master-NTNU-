@@ -1,49 +1,49 @@
 # =============================================================================
-# VaR-harmonisering på tvers av banker (95% vs 99%)
+# VaR harmonization across banks (95% vs 99%)
 # =============================================================================
 #
-# Dette scriptet lager en felles VaR-variabel på 99% slik at banker som
-# rapporterer 95% og banker som rapporterer 99% kan sammenlignes direkte.
+# This script produces one comparable VaR measure at the 99% level, so banks that
+# report 95% VaR and banks that report 99% VaR can be compared directly.
 #
-# SLIK FUNKER DET (menneskeversjon):
-# 1) (KRAV 1) Ikke bland ulike definisjoner:
-#    - Hvis datasettet har kolonner som beskriver VaR-definisjonen
-#      (f.eks. horisont/rapportering/type) og de varierer, stopper vi og ber deg
-#      filtrere til én definisjon med `--definition-filter col=value`.
+# HOW IT WORKS:
+# 1) (REQUIREMENT 1) Do not mix different VaR definitions:
+#    - If the dataset contains "definition" columns (e.g., horizon/reporting/type)
+#      and they vary across rows, the script stops and asks you to filter down to
+#      a single definition using `--definition-filter col=value`.
 #
-# 2) (KRAV 2) Estimer konverteringsfaktor k fra kalibreringsbanken:
-#    - Kalibreringsbanken er banken som har både 95% og 99% VaR rapportert.
-#    - For hvert kvartal beregner vi k_t = VaR_99 / VaR_95.
-#    - Vi velger k = median(k_t) (robust mot outliers).
+# 2) (REQUIREMENT 2) Estimate a conversion factor k from a calibration bank:
+#    - The calibration bank is a bank that reports both 95% and 99% VaR.
+#    - For each quarter we compute k_t = VaR_99 / VaR_95.
+#    - We choose k = median(k_t) (robust to outliers).
 #
-# 3) (KRAV 3) Lag harmonisert 99%-VaR:
-#    - Hvis VaR_99 finnes i data: bruk den (observasjon).
-#    - Ellers hvis VaR_95 finnes: bruk k * VaR_95.
-#    - Ellers: NaN.
+# 3) (REQUIREMENT 3) Create a harmonized 99% VaR:
+#    - If VaR_99 is present: use it (reported value).
+#    - Else if VaR_95 is present: use k * VaR_95 (converted).
+#    - Else: NaN.
 #
-# 4) (KRAV 4) Valider på kalibreringsbanken:
-#    - Prediker VaR_99_hat = k * VaR_95 og sammenlign mot observert VaR_99.
+# 4) (REQUIREMENT 4) Validate on the calibration bank:
+#    - Predict VaR_99_hat = k * VaR_95 and compare it to the reported VaR_99.
 #
-# 5) (KRAV 5) Robusthet (minimum):
-#    - Lager `var_level_dummy_99` som du kan bruke i regresjon i stedet for å
-#      harmonisere (1=rapportert 99, 0=kun 95).
-#    - Forslag: kjør analyser separat for 95-banker og 99-banker.
+# 5) (REQUIREMENT 5) Minimum robustness options:
+#    - Creates `var_level_dummy_99` that you can use in regressions instead of
+#      harmonizing (1=reported 99, 0=only 95).
+#    - Suggestion: run analyses separately for 95-banks and 99-banks.
 #
 # INPUT:
-# - Standard i denne mappen: `VaR_python.xlsx` (wide-format) med kolonner som
-#   f.eks. `goldmansachs_95`, `citibank_99`, `Bank_of_America_99%`.
-# - Alternativt: long/panel (CSV/Parquet) med kolonner minst:
-#   `bank_id`, `period_end_date`, `var_95`, `var_99` (små variasjoner håndteres).
+# - Default in this folder: `VaR_python.xlsx` (wide format) with columns like
+#   `goldmansachs_95`, `citibank_99`, `Bank_of_America_99%`.
+# - Alternatively: long/panel (CSV/Parquet) with at least:
+#   `bank_id`, `period_end_date`, `var_95`, `var_99` (small naming variations are handled).
 #
 # OUTPUT:
-# - Konsoll-rapport: k-statistikk + validering + antall konverterte obs.
-# - CSV: `output/merged_with_var_harmonized.csv` (standard) med ny kolonne
+# - Console report: k statistics + validation + number of converted observations.
+# - CSV: `output/merged_with_var_harmonized.csv` (default) with a new column
 #   `var_99_harmonized` (+ `var_99_source` + `var_level_dummy_99`).
 #
-# KJØRING (enklest, for din Excel):
+# RUN (simplest, for your Excel):
 #   python VaR.py
 #
-# Hvis du vil være eksplisitt:
+# If you want to be explicit:
 #   python VaR.py --calib-bank-id bank_of_america
 #
 # =============================================================================
@@ -61,11 +61,11 @@ import pandas as pd
 
 
 # =============================================================================
-# 1) Små hjelpefunksjoner (navn, dato, kolonner, tall)
+# 1) Small helper functions (names, dates, columns, numbers)
 # =============================================================================
 
 
-# Normaliser tekst til "snake_case" (brukes for å få stabile bank-id-er).
+# Normalize text to "snake_case" (used to build stable bank IDs).
 def snake_case(value: object) -> str:
     s = "" if value is None else str(value)
     s = s.strip().lower()
@@ -83,7 +83,7 @@ def snake_case(value: object) -> str:
     return "".join(out).strip("_")
 
 
-# Konverter dato til kvartalsslutt (Q-end), så alle datoer er "kvartalssammenlignbare".
+# Convert a date to quarter-end (Q-end), so all dates align for quarterly comparison.
 def parse_period_end_date(value: object) -> pd.Timestamp:
     if value is None or pd.isna(value):
         return pd.NaT
@@ -93,7 +93,7 @@ def parse_period_end_date(value: object) -> pd.Timestamp:
     return pd.Period(pd.Timestamp(ts), freq="Q").end_time.normalize()
 
 
-# Robust mapping: finn første kolonne som finnes blant flere kandidatnavn.
+# Robust mapping: return the first column that exists among several candidate names.
 def _first_present(columns: Iterable[str], candidates: Iterable[str]) -> str | None:
     cols = {snake_case(c): c for c in columns}
     for cand in candidates:
@@ -103,7 +103,7 @@ def _first_present(columns: Iterable[str], candidates: Iterable[str]) -> str | N
     return None
 
 
-# Gjør en serie om til numerisk (ikke-tall blir NaN).
+# Convert a series to numeric (non-numeric values become NaN).
 def _to_numeric(series: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series):
         return series.astype(float)
@@ -111,11 +111,11 @@ def _to_numeric(series: pd.Series) -> pd.Series:
 
 
 # =============================================================================
-# 2) KRAV 1: Ikke bland ulike VaR-definisjoner
+# 2) REQUIREMENT 1: Do not mix VaR definitions
 # =============================================================================
 
 
-# Bruker-satt filter for å velge én konsistent definisjon før vi estimerer k.
+# User-supplied filters to select one consistent definition before estimating k.
 def apply_definition_filters(df: pd.DataFrame, definition_filters: dict[str, Any] | None) -> pd.DataFrame:
     if not definition_filters:
         return df
@@ -132,7 +132,7 @@ def apply_definition_filters(df: pd.DataFrame, definition_filters: dict[str, Any
     return out
 
 
-# Sikkerhetssjekk: hvis definisjonskolonner finnes og har flere verdier, stopp.
+# Safety check: if definition columns exist and have multiple values, stop.
 def assert_single_definition(df: pd.DataFrame, definition_cols: Iterable[str]) -> None:
     mixed: dict[str, list[Any]] = {}
     for col in definition_cols:
@@ -151,11 +151,11 @@ def assert_single_definition(df: pd.DataFrame, definition_cols: Iterable[str]) -
 
 
 # =============================================================================
-# 3) KRAV 2–4: Estimer k, harmoniser VaR, og valider
+# 3) REQUIREMENTS 2–4: Estimate k, harmonize VaR, and validate
 # =============================================================================
 
 
-# Oppsummeringsstatistikk for k_t = VaR_99 / VaR_95
+# Summary statistics for k_t = VaR_99 / VaR_95
 @dataclass(frozen=True)
 class KSummary:
     n_obs: int
@@ -186,7 +186,7 @@ class KSummary:
         )
 
 
-# Estimer k (median av VaR_99/VaR_95) fra kalibreringsbanken.
+# Estimate k (median of VaR_99/VaR_95) from the calibration bank.
 def estimate_k(
     df: pd.DataFrame,
     calib_bank_id: str,
@@ -197,12 +197,12 @@ def estimate_k(
     date_col: str = "period_end_date",
     require_positive: bool = True,
 ) -> tuple[float, pd.DataFrame]:
-    # Normaliser bank_id hvis bank_id-kolonnen ser ut til å være normalisert
+    # Normalize calib bank id if the bank_id column looks normalized already
     calib_bank_id_norm = str(calib_bank_id)
     if df[bank_id_col].astype(str).str.fullmatch(r"[a-z0-9_]+").all():
         calib_bank_id_norm = snake_case(calib_bank_id_norm)
 
-    # Ta ut kun kalibreringsbanken + rader hvor begge VaR finnes
+    # Keep only the calibration bank + rows where both VaR values exist
     calib = df[df[bank_id_col].astype(str) == calib_bank_id_norm].copy()
     calib = calib[[bank_id_col, date_col, var95_col, var99_col]].copy()
     calib[var95_col] = _to_numeric(calib[var95_col])
@@ -218,7 +218,7 @@ def estimate_k(
             f"calib_bank_id={calib_bank_id!r}, var95_col={var95_col!r}, var99_col={var99_col!r}"
         )
 
-    # k_t per kvartal og robust valg av k som median
+    # k_t per quarter and robust choice of k as the median
     calib["k_t"] = calib[var99_col] / calib[var95_col]
     k_series = calib["k_t"].replace([np.inf, -np.inf], np.nan).dropna()
     if k_series.empty:
@@ -241,7 +241,7 @@ def estimate_k(
     return k, summary.to_frame()
 
 
-# Lag ny kolonne med harmonisert 99% VaR.
+# Add a new column with harmonized 99% VaR.
 def add_harmonized_var(
     df: pd.DataFrame,
     k: float,
@@ -257,17 +257,17 @@ def add_harmonized_var(
     has_99 = out[var99_col].notna()
     has_95 = out[var95_col].notna()
 
-    # Hovedvariabel: 99% (observasjon hvis mulig, ellers konvertering fra 95%)
+    # Main variable: 99% (use reported if available, otherwise convert from 95%)
     out[out_col] = np.nan
     out.loc[has_99, out_col] = out.loc[has_99, var99_col]
     out.loc[~has_99 & has_95, out_col] = k * out.loc[~has_99 & has_95, var95_col]
 
-    # Kilde-tag (praktisk for å sjekke hva som er konvertert)
+    # Source tag (useful to check what was converted)
     out["var_99_source"] = pd.Series(pd.NA, index=out.index, dtype="string")
     out.loc[has_99, "var_99_source"] = "reported_99"
     out.loc[~has_99 & has_95, "var_99_source"] = "converted_from_95"
 
-    # Robusthet-alternativ (KRAV 5A): dummy for nivå
+    # Robustness option (REQ 5A): dummy for reporting level
     out["var_level_dummy_99"] = pd.Series(pd.NA, index=out.index, dtype="Int64")
     out.loc[has_99, "var_level_dummy_99"] = 1
     out.loc[~has_99 & has_95, "var_level_dummy_99"] = 0
@@ -275,7 +275,7 @@ def add_harmonized_var(
     return out
 
 
-# Valider konverteringen på kalibreringsbanken (feilstatistikk).
+# Validate the conversion on the calibration bank (error statistics).
 def validate_on_calib(
     df: pd.DataFrame,
     calib_bank_id: str,
@@ -306,7 +306,7 @@ def validate_on_calib(
     abs_err = calib["abs_pct_error"].replace([np.inf, -np.inf], np.nan).dropna()
     p95 = float(abs_err.quantile(0.95)) if not abs_err.empty else np.nan
 
-    # Enkel sjekk om feilen driver over tid (ikke en full analyse)
+    # Simple check for whether error drifts over time (not a full analysis)
     time_corr = np.nan
     if date_col in calib.columns:
         dates = pd.to_datetime(calib[date_col], errors="coerce")
@@ -327,16 +327,16 @@ def validate_on_calib(
 
 
 # =============================================================================
-# 4) Input: støtte både "wide" Excel og long/panel
+# 4) Input: support both "wide" Excel and long/panel
 # =============================================================================
 
 
-# Wide-kolonner gjenkjennes ved at de slutter på 95 eller 99 (ev. med %)
-# Eksempel: "Bank_of_America_99%" eller "citibank_99" eller "goldmansachs_95"
+# Wide columns are detected by ending in 95 or 99 (optionally with %)
+# Example: "Bank_of_America_99%" or "citibank_99" or "goldmansachs_95"
 _WIDE_VAR_COL_RE = re.compile(r"^(?P<bank>.+?)[_\s-]*(?P<level>95|99)\s*%?$", flags=re.IGNORECASE)
 
 
-# Hvis bruker ikke oppgir kalibreringsbank: finn den banken som har både 95 og 99 observert.
+# If the user does not pass a calibration bank: find a bank that has both 95 and 99 observed.
 def infer_calibration_bank_id(
     df: pd.DataFrame,
     *,
@@ -373,7 +373,7 @@ def infer_calibration_bank_id(
     )
 
 
-# Konverter wide-format (Excel) til panel-format med bank_id + period_end_date + var_95 + var_99
+# Convert wide format (Excel) to panel format with bank_id + period_end_date + var_95 + var_99
 def wide_var_to_long(
     df_wide: pd.DataFrame,
     *,
@@ -438,7 +438,7 @@ def wide_var_to_long(
     return wide.sort_values([bank_id_col, period_end_date_col]).reset_index(drop=True)
 
 
-# Les inputfilen (Excel/CSV/Parquet).
+# Read the input file (Excel/CSV/Parquet).
 def load_input(path: Path, sheet_name: str | None) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if suffix in (".xlsx", ".xls"):
@@ -452,7 +452,7 @@ def load_input(path: Path, sheet_name: str | None) -> pd.DataFrame:
     raise ValueError(f"Unsupported input format: {path}")
 
 
-# Sørg for at vi ender opp med et panel med standardkolonner.
+# Ensure we end up with a panel with standard columns.
 def ensure_long_panel(
     df: pd.DataFrame,
     *,
@@ -466,7 +466,7 @@ def ensure_long_panel(
     var95_col = var95_col or _first_present(df.columns, ["var_95", "VaR_95", "var95", "VaR95", "var_95_pct", "var95%"])
     var99_col = var99_col or _first_present(df.columns, ["var_99", "VaR_99", "var99", "VaR99", "var_99_pct", "var99%"])
 
-    # Long-format (har bank_id + dato + minst én av var_95/var_99)
+    # Long format (has bank_id + date + at least one of var_95/var_99)
     if bank_id_col and date_col and (var95_col or var99_col):
         out = df.copy()
         out = out.rename(columns={bank_id_col: "bank_id", date_col: "period_end_date"})
@@ -479,7 +479,7 @@ def ensure_long_panel(
             out["bank_id"] = out["bank_id"].astype(str).map(snake_case)
         return out, "bank_id", "period_end_date", "var_95", "var_99"
 
-    # Wide-format (som Excel-en din): vi trenger i det minste en dato-kolonne
+    # Wide format (like your Excel): we need at least a date column
     if date_col is None:
         raise ValueError(
             "Could not identify a date column. Provide a long panel with `period_end_date` or pass --date-col."
@@ -489,7 +489,7 @@ def ensure_long_panel(
     return long, "bank_id", "period_end_date", "var_95", "var_99"
 
 
-# Metode-tekst (2–4 setninger) for oppgaven.
+# Method text (2–4 sentences) you can paste into the assignment.
 def method_text(k: float) -> str:
     return (
         "We harmonize VaR levels by estimating a conversion factor k from the bank reporting both 95% and 99% VaR, "
@@ -498,7 +498,7 @@ def method_text(k: float) -> str:
 
 
 # =============================================================================
-# 5) CLI / kjøring
+# 5) CLI / run
 # =============================================================================
 
 
@@ -525,11 +525,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # 1) Les input
+    # 1) Read input
     df_raw = load_input(args.input, args.sheet)
     df_raw.columns = [str(c).strip() for c in df_raw.columns]
 
-    # 2) Konverter til panel-format (bank_id + period_end_date + var_95 + var_99)
+    # 2) Convert to panel format (bank_id + period_end_date + var_95 + var_99)
     df, bank_id_col, date_col, var95_col, var99_col = ensure_long_panel(
         df_raw,
         bank_id_col=args.bank_id_col,
@@ -538,7 +538,7 @@ def main(argv: list[str] | None = None) -> int:
         var99_col=args.var99_col,
     )
 
-    # 3) (Valgfritt) Brukerfilter til én VaR-definisjon (KRAV 1)
+    # 3) (Optional) user filter to one VaR definition (REQ 1)
     definition_filters: dict[str, Any] = {}
     for item in args.definition_filter:
         if "=" not in item:
@@ -548,7 +548,7 @@ def main(argv: list[str] | None = None) -> int:
 
     df = apply_definition_filters(df, definition_filters)
 
-    # 4) KRAV 1: stopp hvis definisjonskolonner varierer
+    # 4) REQ 1: stop if definition columns vary
     assert_single_definition(
         df,
         [
@@ -560,14 +560,14 @@ def main(argv: list[str] | None = None) -> int:
         ],
     )
 
-    # 5) Finn kalibreringsbank (hvis ikke oppgitt)
+    # 5) Find calibration bank (if not provided)
     calib_bank_id = args.calib_bank_id
     inferred = False
     if calib_bank_id is None:
         calib_bank_id = infer_calibration_bank_id(df, bank_id_col=bank_id_col, var95_col=var95_col, var99_col=var99_col)
         inferred = True
 
-    # 6) Konsoll-header
+    # 6) Console header
     print("=" * 72)
     print("VaR harmonization (target level: 99%)")
     print("=" * 72)
@@ -578,7 +578,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Calibration bank_id: {calib_bank_id!r}" + (" (inferred)" if inferred else ""))
     print(f"Definition filters: {definition_filters if definition_filters else '(none provided)'}")
 
-    # 7) KRAV 2: estimer k
+    # 7) REQ 2: estimate k
     k, k_summary = estimate_k(
         df,
         calib_bank_id,
@@ -588,15 +588,15 @@ def main(argv: list[str] | None = None) -> int:
         date_col=date_col,
     )
 
-    # 8) KRAV 3: bygg harmonisert VaR
+    # 8) REQ 3: build harmonized VaR
     df_out = add_harmonized_var(df, k, var95_col, var99_col, out_col="var_99_harmonized")
 
-    # 9) KRAV 4: valider på kalibreringsbanken
+    # 9) REQ 4: validate on the calibration bank
     validation = validate_on_calib(
         df_out, calib_bank_id, k, var95_col, var99_col, bank_id_col=bank_id_col, date_col=date_col
     )
 
-    # 10) Telling av hvor mye som er rapportert vs konvertert
+    # 10) Count how much is reported vs converted
     n_converted = int(((df_out[var99_col].isna()) & (df_out[var95_col].notna())).sum())
     n_reported_99 = int(df_out[var99_col].notna().sum())
     n_missing_both = int(((df_out[var99_col].isna()) & (df_out[var95_col].isna())).sum())
@@ -613,17 +613,17 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Converted from 95%: {n_converted:,}")
     print(f"Missing both: {n_missing_both:,}")
 
-    # 11) Lagre CSV med harmonisert variabel
+    # 11) Save CSV with the harmonized variable
     args.output.parent.mkdir(parents=True, exist_ok=True)
     df_out.to_csv(args.output, index=False)
     print(f"\nSaved: {args.output}")
 
-    # 12) Robusthet-alternativer (KRAV 5)
+    # 12) Robustness alternatives (REQ 5)
     print("\n[robustness alternatives]")
     print("A) Use `var_level_dummy_99` in regressions instead of harmonizing (1=reported 99, 0=only 95).")
     print("B) Run analyses separately for banks that report only 95% vs only 99%.")
 
-    # 13) Metode-tekst (kan limes inn i oppgaven)
+    # 13) Method text (can be pasted into the assignment)
     print("\n[method text]")
     print(method_text(k))
     return 0
