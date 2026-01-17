@@ -11,6 +11,20 @@ Output:
 - output/merged_quarterly_balanced.csv
 
 Deterministic: sorted file order, sorted output rows.
+
+Plain-English overview (for non-Python readers):
+- This script reads many Excel files (one per bank) for two statement types: Balance Sheet and Income Statement.
+- Inside each Excel file it finds the table header row by searching for the text "Field Name" in the first column.
+- It treats each table row as a financial line item (e.g., "Total Assets") and each column header as a reporting period.
+- It cleans the line item names into consistent machine-friendly labels and also fixes duplicates by adding suffixes (_2, _3, ...).
+- It converts each reporting period into a quarter-end date (e.g., Q1 2024 → 2024-03-31) so different date formats match.
+- It reshapes the data so you end up with one row per bank per quarter, with many columns for all the line items.
+- It then merges Balance Sheet and Income Statement rows on the shared key: (bank, quarter-end date).
+- It writes four CSV files:
+  1) missing_income_banks.csv: banks that have balance sheets but no income statements.
+  2) date_coverage_report.csv: min/max quarter and number of quarters available per bank for each statement type.
+  3) merged_quarterly_unbalanced.csv: the merged panel using all bank-quarter rows that exist in both statements.
+  4) merged_quarterly_balanced.csv: a stricter panel keeping only the quarters that are present for every bank (intersection).
 """
 
 from __future__ import annotations
@@ -34,6 +48,11 @@ OUTPUT_DIR = ROOT / "output"
 
 
 def snake_case(value: object) -> str:
+    """Convert a label into a simple, consistent identifier.
+
+    Example: "Total Assets (€)" -> "total_assets".
+    This helps columns/fields match across files even if the original text differs slightly.
+    """
     s = "" if value is None else str(value)
     s = s.strip().lower()
     out: list[str] = []
@@ -51,6 +70,11 @@ def snake_case(value: object) -> str:
 
 
 def extract_bank_name(stem: str) -> str:
+    """Derive a bank identifier from an Excel filename (without the .xlsx).
+
+    It removes common suffix words like "income statement" or "balance sheet"
+    and returns a compact bank key used for merging.
+    """
     name = snake_case(stem)
     for suffix in ("income", "statement", "balance", "sheet"):
         if name.endswith("_" + suffix):
@@ -61,6 +85,11 @@ def extract_bank_name(stem: str) -> str:
 
 
 def parse_period_end_date(value: object) -> pd.Timestamp:
+    """Parse many possible "period" formats and return a quarter-end date.
+
+    Input can be: Excel date serials, a year (e.g., 2023), a date string, or "2024Q1".
+    Output is normalized to the quarter-end (e.g., 2024-03-31) to make merges consistent.
+    """
     if value is None or pd.isna(value):
         return pd.NaT
 
@@ -121,6 +150,11 @@ def parse_period_end_date(value: object) -> pd.Timestamp:
 
 
 def find_table_header_row(path: Path, sheet_name: str) -> int:
+    """Find the row index where the real table header starts in the Excel sheet.
+
+    Refinitiv exports often have some metadata rows first. We detect the header row by
+    scanning the first column for the exact text "Field Name".
+    """
     # Fast path: only read first col and first N rows
     col0 = pd.read_excel(path, sheet_name=sheet_name, header=None, usecols=[0], nrows=300)
     series = col0.iloc[:, 0].astype(str).str.strip().str.casefold()
@@ -140,6 +174,10 @@ def find_table_header_row(path: Path, sheet_name: str) -> int:
 
 
 def list_xlsx_files(directory: Path) -> list[Path]:
+    """List all .xlsx files in a directory, in a deterministic (sorted) order.
+
+    Temporary Excel lock files (~$...) are ignored so they don't break processing.
+    """
     if not directory.exists():
         raise Exception(f"Missing input directory: {directory}")
     paths = sorted([p for p in directory.glob("*.xlsx")])
@@ -150,6 +188,10 @@ def list_xlsx_files(directory: Path) -> list[Path]:
 
 
 def resolve_input_dir(candidates: list[Path], label: str) -> Path:
+    """Pick the first candidate directory that exists and contains real .xlsx files.
+
+    This allows a couple of common folder layouts (with or without the inner subfolder).
+    """
     existing = [p for p in candidates if p.exists() and p.is_dir()]
     for p in existing:
         if any((not f.name.startswith("~$")) for f in p.glob("*.xlsx")):
@@ -162,6 +204,11 @@ def resolve_input_dir(candidates: list[Path], label: str) -> Path:
 
 
 def read_statement_long(*, path: Path, bank: str, statement_type: str, sheet_name: str) -> pd.DataFrame:
+    """Read one Excel statement file and return a "long" table.
+
+    Long format means: one row per (bank, statement type, line item, quarter-end date).
+    This is a convenient intermediate format before pivoting to a wide panel.
+    """
     header_row = find_table_header_row(path, sheet_name)
     df = pd.read_excel(path, sheet_name=sheet_name, header=header_row)
     n_cols_before = df.shape[1]
@@ -246,6 +293,10 @@ def read_statement_long(*, path: Path, bank: str, statement_type: str, sheet_nam
 
 
 def read_all_statements_long(*, directory: Path, statement_type: str, sheet_name: str) -> pd.DataFrame:
+    """Read all Excel files in a folder and stack them into one long table.
+
+    Each file is treated as one bank. Results are sorted to keep output deterministic.
+    """
     paths = list_xlsx_files(directory)
     print(f"\nFound {len(paths)} {statement_type} files in {directory}:")
 
@@ -266,6 +317,10 @@ def read_all_statements_long(*, directory: Path, statement_type: str, sheet_name
 
 
 def statement_long_to_wide(long: pd.DataFrame, statement_type: str) -> pd.DataFrame:
+    """Convert long-format statement data into a wide bank×quarter panel.
+
+    Output: one row per (bank, quarter-end date) and one column per line item.
+    """
     df = long[long["statement_type"] == statement_type].copy()
 
     dup = df.duplicated(subset=["bank", "period_end_date", "field_name"], keep=False)
@@ -292,6 +347,10 @@ def statement_long_to_wide(long: pd.DataFrame, statement_type: str) -> pd.DataFr
 
 
 def date_coverage_report(balance_wide: pd.DataFrame, income_wide: pd.DataFrame) -> pd.DataFrame:
+    """Summarize which quarters each bank has for each statement type.
+
+    Produces min/max quarter-end date and number of unique quarters per bank, for balance and income.
+    """
     def cov(df: pd.DataFrame, label: str) -> pd.DataFrame:
         return df.groupby("bank", as_index=False)["period_end_date"].agg(
             **{
@@ -307,6 +366,11 @@ def date_coverage_report(balance_wide: pd.DataFrame, income_wide: pd.DataFrame) 
 
 
 def build_balanced_panel(merged_unbalanced: pd.DataFrame) -> pd.DataFrame:
+    """Create a strictly balanced panel across banks.
+
+    It keeps only the quarter-end dates that are present for every bank (date intersection).
+    This is useful for models that require the same time periods for all banks.
+    """
     banks = sorted(merged_unbalanced["bank"].unique())
     if not banks:
         return merged_unbalanced.copy()
@@ -330,6 +394,7 @@ def build_balanced_panel(merged_unbalanced: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
+    """Run the end-to-end pipeline: read Excel, clean/reshape, merge, and write CSV outputs."""
     print("=" * 60)
     print("Quarterly Panel Builder (merge key: bank + period_end_date)")
     print("=" * 60)
