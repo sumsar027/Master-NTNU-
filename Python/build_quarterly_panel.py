@@ -81,7 +81,14 @@ def extract_bank_name(stem: str) -> str:
             name = name[: -(len(suffix) + 1)]
         if name.endswith(suffix):
             name = name[: -len(suffix)]
-    return name.replace("_", "")
+    name = name.replace("_", "")
+
+    # Manual aliases for known filename inconsistencies/typos across statement folders.
+    aliases = {
+        "unsbancorp": "usbancorp",
+        "usnbancorp": "usbancorp",
+    }
+    return aliases.get(name, name)
 
 
 def parse_period_end_date(value: object) -> pd.Timestamp:
