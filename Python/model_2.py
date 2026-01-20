@@ -14,8 +14,7 @@ Terminal output is intentionally compact:
 
 Outputs:
 - output/analysis_dataset.csv
-- output/table_asset_leverage_growth.tex
-- output/table_asset_leverage_growth.md
+- output/book_side_regression_results.csv
 """
 
 from __future__ import annotations
@@ -37,8 +36,7 @@ ACCOUNTING_PATH = Path("output/merged_quarterly_balanced.csv")
 MARKET_PATH = Path("output/market_data_quarterly.csv")
 
 OUTPUT_DATASET_PATH = Path("output/analysis_dataset.csv")
-OUTPUT_TEX_PATH = Path("output/table_asset_leverage_growth.tex")
-OUTPUT_MD_PATH = Path("output/table_asset_leverage_growth.md")
+OUTPUT_RESULTS_CSV = Path("output/book_side_regression_results.csv")
 
 
 def die(msg: str) -> None:
@@ -205,68 +203,77 @@ def run_panel_fe(
     }
 
 
-def save_tables_book(results: dict[int, dict[str, object]]) -> None:
+def save_results_csv(results: dict[int, dict[str, object]]) -> None:
     """
-    Write a small 3-column table (book-side only) to:
-    - LaTeX (booktabs)
-    - Markdown
+    Save book-side regression results (models 1-3) to a single CSV.
+
+    Columns (exact):
+    - model
+    - specification
+    - dependent_variable
+    - independent_variable
+    - coef
+    - std_error
+    - t_stat
+    - p_value
+    - r2_adj_or_within
+    - n_obs
     """
-    def coef_cell(k: int) -> str:
+    spec = {
+        1: "Pooled OLS",
+        2: "Time FE",
+        3: "Bank+Time FE",
+    }
+    dep = "asset_growth"
+    indep = "book_lev_growth"
+
+    rows: list[dict[str, object]] = []
+    for k in (1, 2, 3):
         r = results[k]
-        return f"{fmt_num(float(r['coef']))}{format_stars(float(r['pvalue']))}"
+        coef = float(r["coef"])
+        se = float(r["se"])
+        tstat = coef / se if np.isfinite(coef) and np.isfinite(se) and se != 0 else np.nan
+        pval = float(r["pvalue"])
+        r2 = None
+        if k == 1:
+            r2 = float(r["adj_r2"])
+        else:
+            r2_within = float(r.get("r2_within", np.nan))
+            r2 = r2_within if np.isfinite(r2_within) else float(r["adj_r2"])
 
-    def se_cell(k: int) -> str:
-        r = results[k]
-        return f"({fmt_num(float(r['se']))})"
+        rows.append(
+            {
+                "model": k,
+                "specification": spec[k],
+                "dependent_variable": dep,
+                "independent_variable": indep,
+                "coef": coef,
+                "std_error": se,
+                "t_stat": tstat,
+                "p_value": pval,
+                "r2_adj_or_within": r2,
+                "n_obs": int(r["nobs"]),
+            }
+        )
 
-    def r2_cell(k: int) -> str:
-        # For simplicity we keep the same r2 field here as before.
-        return fmt_num(float(results[k]["adj_r2"]))
-
-    def n_cell(k: int) -> str:
-        return str(int(results[k]["nobs"]))
-
-    tex = "\n".join(
-        [
-            r"\begin{table}[!htbp]",
-            r"\centering",
-            r"\caption{Asset Growth and Leverage Growth (Book Leverage)}",
-            r"\begin{tabular}{lccc}",
-            r"\toprule",
-            r" & (1) & (2) & (3) \\",
-            r"\midrule",
-            f"Book Leverage Growth & {coef_cell(1)} & {coef_cell(2)} & {coef_cell(3)} \\\\",
-            f" & {se_cell(1)} & {se_cell(2)} & {se_cell(3)} \\\\",
-            r"\midrule",
-            f"Adj. $R^2$ & {r2_cell(1)} & {r2_cell(2)} & {r2_cell(3)} \\\\",
-            f"Observations & {n_cell(1)} & {n_cell(2)} & {n_cell(3)} \\\\",
-            r"\bottomrule",
-            r"\end{tabular}",
-            r"\begin{flushleft}\footnotesize",
-            r"Notes: Robust standard errors clustered at the bank level in parentheses. Significance: *** 1\%, ** 5\%, * 10\%.",
-            r"\end{flushleft}",
-            r"\end{table}",
-            "",
-        ]
+    out = pd.DataFrame(
+        rows,
+        columns=[
+            "model",
+            "specification",
+            "dependent_variable",
+            "independent_variable",
+            "coef",
+            "std_error",
+            "t_stat",
+            "p_value",
+            "r2_adj_or_within",
+            "n_obs",
+        ],
     )
 
-    md = "\n".join(
-        [
-            "|  | (1) | (2) | (3) |",
-            "| --- | --- | --- | --- |",
-            f"| Book Leverage Growth | {coef_cell(1)} | {coef_cell(2)} | {coef_cell(3)} |",
-            f"|  | {se_cell(1)} | {se_cell(2)} | {se_cell(3)} |",
-            f"| Adj. R2 | {r2_cell(1)} | {r2_cell(2)} | {r2_cell(3)} |",
-            f"| N | {n_cell(1)} | {n_cell(2)} | {n_cell(3)} |",
-            "",
-            "Notes: Robust SEs clustered by bank. Significance: *** 1%, ** 5%, * 10%.",
-            "",
-        ]
-    )
-
-    OUTPUT_TEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_TEX_PATH.write_text(tex, encoding="utf-8")
-    OUTPUT_MD_PATH.write_text(md, encoding="utf-8")
+    OUTPUT_RESULTS_CSV.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(OUTPUT_RESULTS_CSV, index=False)
 
 
 def print_debug_head(df: pd.DataFrame, cols: list[str]) -> None:
@@ -364,8 +371,8 @@ def main() -> None:
         results[2] = run_panel_fe(base, y="asset_growth", x="book_lev_growth", entity=entity, time=time, entity_fe=False, time_fe=True)
         results[3] = run_panel_fe(base, y="asset_growth", x="book_lev_growth", entity=entity, time=time, entity_fe=True, time_fe=True)
 
-        # Save LaTeX + Markdown tables
-        save_tables_book(results)
+        # Save book-side results (models 1-3) to CSV
+        save_results_csv(results)
 
         # Compact, explicit terminal output (self-explanatory)
         print("\nDependent variable: Asset growth (Δ log total assets, quarterly, %)")
