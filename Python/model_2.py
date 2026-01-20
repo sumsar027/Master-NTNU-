@@ -1,428 +1,363 @@
 """
-Asset Growth and Leverage Growth (book-side only).
+Asset Growth vs Leverage Growth Regressions
+Tests if banks grow assets when they increase leverage (procyclical behavior)
 
-This script replicates the "book-side" of an Adrian & Shin-style table:
-  Y = Asset growth (quarterly log-diff of total assets, in %)
-  X = Book leverage growth (quarterly log-diff of Assets/Equity, in %)
+Model: Asset Growth = β₀ + β₁·Leverage Growth + ε
 
-Terminal output is intentionally compact:
-- Loaded <file> shape=(...)
-- ENTITY=<...> TIME=<...>
-- Using: assets=<...>, equity=<...>, debt=<...>
-- Market data existence (no market regressions are run here)
-- Results for (1)-(3) with coef, SE, t-stat, and significance stars
+We run three versions:
+1. Pooled OLS (simple regression)
+2. Time FE (controls for quarter-specific shocks like financial crisis)
+3. Bank + Time FE (controls for both bank differences and time shocks)
 
-Outputs:
-- output/analysis_dataset.csv
-- output/book_side_regression_results.csv
+Positive β₁ = when leverage increases, assets also increase (procyclical)
 """
-
-from __future__ import annotations
-
-import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 from linearmodels.panel import PanelOLS
+from pathlib import Path
 
+# ============================================================================
+# CONFIG
+# ============================================================================
 
-# -----------------------------
-# Input / output paths
-# -----------------------------
-ACCOUNTING_PATH = Path("output/merged_quarterly_balanced.csv")
-# Market file is *not used* here, but we report whether it exists (for later market-side extension).
-MARKET_PATH = Path("output/market_data_quarterly.csv")
+# Input file (merged quarterly balance sheet data)
+INPUT_FILE = Path("output/merged_quarterly_balanced.csv")
 
-OUTPUT_DATASET_PATH = Path("output/analysis_dataset.csv")
-OUTPUT_RESULTS_CSV = Path("output/book_side_regression_results.csv")
+# Output files
+OUTPUT_DATASET = Path("output/analysis_dataset.csv")
+OUTPUT_RESULTS = Path("output/book_side_regression_results.csv")
 
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
 
-def die(msg: str) -> None:
-    """Print an error message and exit immediately (hard stop)."""
-    print(msg)
-    sys.exit(1)
-
-
-def pick_first_existing(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    """
-    Return the first column name that exists in df from a list of candidates.
-    Used to handle different naming conventions across datasets.
-    """
-    for c in candidates:
-        if c in df.columns:
-            return c
+def find_column(df, candidates):
+    """Find the first column name that exists in the dataframe"""
+    for col in candidates:
+        if col in df.columns:
+            return col
     return None
 
 
-def coerce_numeric(series: pd.Series) -> pd.Series:
-    """Convert a Series to numeric; non-parsable values become NaN."""
-    return pd.to_numeric(series, errors="coerce")
-
-
-def coerce_time(series: pd.Series, *, label: str) -> pd.Series:
+def calculate_growth(df, entity_col, value_col, output_col):
     """
-    Ensure the TIME column is datetime.
-    If parsing fails for more than ~10% of non-missing values, stop (guardrail).
+    Calculate quarterly growth rate as log difference (in percent)
+    
+    Growth = 100 × (log(X_t) - log(X_t-1))
+    
+    This is approximately equal to percentage change.
+    Only calculated when both current and previous values are positive.
     """
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return series
-    parsed = pd.to_datetime(series, errors="coerce")
-    nonmissing = int(series.notna().sum())
-    parsed_ok = int(parsed.notna().sum())
-    if nonmissing == 0:
-        return parsed
-    if (parsed_ok / nonmissing) >= 0.90:
-        return parsed
-    die(f"{label}: TIME column could not be parsed to datetime reliably (parsed {parsed_ok}/{nonmissing}).")
-
-
-def detect_entity_time(df: pd.DataFrame) -> tuple[str, str]:
-    """
-    Auto-detect panel identifiers:
-    - ENTITY: bank identifier (e.g., 'bank', 'ticker', ...)
-    - TIME:   quarter end date (e.g., 'period_end_date', ...)
-    """
-    entity_candidates = ["bank", "bank_id", "ticker", "permno", "entity", "id"]
-    time_candidates = ["period_end_date", "date", "quarter", "time", "period"]
-    entity = pick_first_existing(df, entity_candidates)
-    time = pick_first_existing(df, time_candidates)
-    if entity is None:
-        die(f"Could not detect ENTITY column. Tried: {entity_candidates}")
-    if time is None:
-        die(f"Could not detect TIME column. Tried: {time_candidates}")
-    return entity, time
-
-
-def format_stars(pvalue: float) -> str:
-    """Significance stars for two-sided p-values."""
-    if not np.isfinite(pvalue):
-        return ""
-    if pvalue < 0.01:
-        return "***"
-    if pvalue < 0.05:
-        return "**"
-    if pvalue < 0.10:
-        return "*"
-    return ""
-
-
-def fmt_num(value: float | None, *, digits: int = 3) -> str:
-    """Format numeric output for tables; fallback to N/A for missing/invalid."""
-    if value is None or not np.isfinite(value):
-        return "N/A"
-    return f"{value:.{digits}f}"
-
-
-def log_diff_growth(df: pd.DataFrame, *, entity: str, value_col: str, out_col: str) -> pd.DataFrame:
-    """
-    Compute within-bank quarterly log-difference growth in percent:
-        100 * (log(x_t) - log(x_{t-1}))
-
-    Invalid if:
-    - current or lag is missing
-    - current or lag is non-positive (log undefined)
-    """
-    x = coerce_numeric(df[value_col])
-    x_lag = x.groupby(df[entity], sort=False).shift(1)
+    # Convert to numeric (handles any text values)
+    x = pd.to_numeric(df[value_col], errors='coerce')
+    
+    # Get previous quarter's value for each bank
+    x_lag = x.groupby(df[entity_col], sort=False).shift(1)
+    
+    # Only calculate when both current and previous values are positive
     valid = x.notna() & x_lag.notna() & (x > 0) & (x_lag > 0)
-    df[out_col] = np.where(valid, 100.0 * (np.log(x) - np.log(x_lag)), np.nan)
+    
+    # Calculate log difference and convert to percent
+    df[output_col] = np.where(valid, 100.0 * (np.log(x) - np.log(x_lag)), np.nan)
+    
     return df
 
 
-def run_pooled_ols(df: pd.DataFrame, *, y: str, x: str, entity: str) -> dict[str, object]:
-    """
-    (1) Pooled OLS:
-        y_it = a + b * x_it + e_it
-    with standard errors clustered by bank (ENTITY).
-    """
-    model_df = df[[entity, y, x]].dropna().copy()
-    if model_df.empty:
-        raise ValueError(f"Empty sample for pooled OLS: {y} ~ {x}")
+def add_significance_stars(p_value):
+    """Add significance stars based on p-value"""
+    if not np.isfinite(p_value):
+        return ""
+    if p_value < 0.01:
+        return "***"  # 1% significance
+    if p_value < 0.05:
+        return "**"   # 5% significance
+    if p_value < 0.10:
+        return "*"    # 10% significance
+    return ""
 
-    y_vec = model_df[y].astype(float).to_numpy()
-    x_mat = sm.add_constant(model_df[[x]].astype(float).to_numpy(), has_constant="add")
-    res = sm.OLS(y_vec, x_mat).fit(cov_type="cluster", cov_kwds={"groups": model_df[entity]})
 
+# ============================================================================
+# LOAD & PREPARE DATA
+# ============================================================================
+
+def load_data():
+    """Load balance sheet data and identify bank and date columns"""
+    
+    if not INPUT_FILE.exists():
+        print(f"ERROR: Missing file {INPUT_FILE}")
+        exit(1)
+    
+    df = pd.read_csv(INPUT_FILE)
+    print(f"Loaded {INPUT_FILE.name}: {len(df)} rows, {df.shape[1]} columns")
+    
+    # Find the bank identifier column (different datasets use different names)
+    entity_col = find_column(df, ['bank', 'bank_id', 'ticker', 'entity'])
+    if entity_col is None:
+        print("ERROR: Could not find bank identifier column")
+        exit(1)
+    
+    # Find the date column
+    time_col = find_column(df, ['period_end_date', 'date', 'quarter', 'time'])
+    if time_col is None:
+        print("ERROR: Could not find date column")
+        exit(1)
+    
+    print(f"Using: bank identifier = '{entity_col}', date = '{time_col}'")
+    
+    # Clean up bank names and convert dates
+    df[entity_col] = df[entity_col].astype(str).str.strip()
+    df[time_col] = pd.to_datetime(df[time_col])
+    
+    # Sort by bank and date (important for calculating growth rates)
+    df = df.sort_values([entity_col, time_col]).reset_index(drop=True)
+    
+    return df, entity_col, time_col
+
+
+def prepare_variables(df, entity_col):
+    """
+    Create leverage and growth variables
+    
+    Book Leverage = Total Assets / Equity
+    (how many dollars of assets per dollar of equity)
+    """
+    
+    # Find the columns we need (handle different naming conventions)
+    assets_col = find_column(df, ['total_assets_2', 'total_assets', 'assets'])
+    equity_col = find_column(df, ['common_equity_total', 
+                                   'common_equity_attributable_to_parent_shareholders',
+                                   'total_shareholders_equity', 'total_equity'])
+    
+    if assets_col is None:
+        print("ERROR: Could not find assets column")
+        exit(1)
+    if equity_col is None:
+        print("ERROR: Could not find equity column")
+        exit(1)
+    
+    print(f"Using: assets = '{assets_col}', equity = '{equity_col}'")
+    
+    # Convert to numeric
+    df['assets'] = pd.to_numeric(df[assets_col], errors='coerce')
+    df['equity'] = pd.to_numeric(df[equity_col], errors='coerce')
+    
+    # Calculate book leverage (only when both assets and equity are positive)
+    valid = df['assets'].notna() & df['equity'].notna() & (df['assets'] > 0) & (df['equity'] > 0)
+    df['book_leverage'] = np.where(valid, df['assets'] / df['equity'], np.nan)
+    
+    # Calculate growth rates (quarter-to-quarter % change)
+    df = calculate_growth(df, entity_col, 'assets', 'asset_growth')
+    df = calculate_growth(df, entity_col, 'book_leverage', 'leverage_growth')
+    
+    # Report how many observations we have
+    n_valid = df[['asset_growth', 'leverage_growth']].notna().all(axis=1).sum()
+    print(f"Valid growth observations: {n_valid} (first quarter per bank is dropped)")
+    
+    return df
+
+
+# ============================================================================
+# RUN REGRESSIONS
+# ============================================================================
+
+def run_pooled_ols(df, entity_col):
+    """
+    Model 1: Pooled OLS
+    Simple regression without any fixed effects
+    Standard errors clustered by bank
+    """
+    # Keep only complete observations
+    reg_data = df[[entity_col, 'asset_growth', 'leverage_growth']].dropna()
+    
+    if reg_data.empty:
+        raise ValueError("No valid observations for regression")
+    
+    # Prepare variables
+    y = reg_data['asset_growth'].values
+    X = sm.add_constant(reg_data[['leverage_growth']].values)
+    
+    # Run regression with clustered standard errors
+    model = sm.OLS(y, X)
+    result = model.fit(cov_type='cluster', cov_kwds={'groups': reg_data[entity_col]})
+    
     return {
-        "coef": float(res.params[1]),
-        "se": float(res.bse[1]),
-        "pvalue": float(res.pvalues[1]),
-        "adj_r2": float(res.rsquared_adj),
-        "nobs": int(res.nobs),
+        'coef': result.params[1],
+        'se': result.bse[1],
+        'pvalue': result.pvalues[1],
+        'r2': result.rsquared_adj,
+        'nobs': int(result.nobs)
     }
 
 
-def run_panel_fe(
-    df: pd.DataFrame,
-    *,
-    y: str,
-    x: str,
-    entity: str,
-    time: str,
-    entity_fe: bool,
-    time_fe: bool,
-) -> dict[str, object]:
+def run_panel_fe(df, entity_col, time_col, bank_fe=False, time_fe=False):
     """
-    Fixed effects models using PanelOLS (linearmodels):
-    - Time FE: includes time dummies
-    - Two-way FE: includes both entity and time dummies
-    SE are clustered by entity (bank).
+    Fixed effects models
+    
+    bank_fe=True: controls for time-invariant bank characteristics
+    time_fe=True: controls for quarter-specific shocks (e.g., financial crisis)
+    
+    Standard errors clustered by bank
     """
-    model_df = df[[entity, time, y, x]].dropna().copy()
-    if model_df.empty:
-        raise ValueError(f"Empty sample for FE: {y} ~ {x}")
-
-    # PanelOLS expects a MultiIndex [entity, time]
-    model_df = model_df.set_index([entity, time])
-
-    mod = PanelOLS(
-        model_df[y].astype(float),
-        model_df[[x]].astype(float),
-        entity_effects=entity_fe,
-        time_effects=time_fe,
+    # Keep only complete observations
+    reg_data = df[[entity_col, time_col, 'asset_growth', 'leverage_growth']].dropna()
+    
+    if reg_data.empty:
+        raise ValueError("No valid observations for regression")
+    
+    # Set up panel structure (bank × quarter)
+    reg_data = reg_data.set_index([entity_col, time_col])
+    
+    # Run fixed effects regression
+    model = PanelOLS(
+        reg_data['asset_growth'],
+        reg_data[['leverage_growth']],
+        entity_effects=bank_fe,
+        time_effects=time_fe
     )
-    res = mod.fit(cov_type="clustered", cluster_entity=True)
-
-    # We compute an "adjusted R2-like" metric (not perfect apples-to-apples vs pooled OLS),
-    # and we also keep within R2 if the object provides it.
-    denom = float(res.total_ss) / float(res.nobs - 1) if res.nobs and (res.nobs - 1) > 0 else np.nan
-    adj_r2 = np.nan
-    if np.isfinite(denom) and denom != 0 and np.isfinite(float(res.df_resid)) and float(res.df_resid) > 0:
-        adj_r2 = 1.0 - (float(res.resid_ss) / float(res.df_resid)) / denom
-
+    result = model.fit(cov_type='clustered', cluster_entity=True)
+    
+    # For FE models, we prefer "within R²" which shows fit after removing fixed effects
+    r2 = getattr(result, 'rsquared_within', result.rsquared_inclusive)
+    
     return {
-        "coef": float(res.params[x]),
-        "se": float(res.std_errors[x]),
-        "pvalue": float(res.pvalues[x]),
-        "adj_r2": float(adj_r2) if np.isfinite(adj_r2) else np.nan,
-        # If available, this is the within R2 (often the most relevant for FE models)
-        "r2_within": float(getattr(res, "rsquared_within", np.nan)),
-        "nobs": int(res.nobs),
+        'coef': result.params['leverage_growth'],
+        'se': result.std_errors['leverage_growth'],
+        'pvalue': result.pvalues['leverage_growth'],
+        'r2': r2,
+        'nobs': int(result.nobs)
     }
 
 
-def save_results_csv(results: dict[int, dict[str, object]]) -> None:
-    """
-    Save book-side regression results (models 1-3) to a single CSV.
+def run_all_regressions(df, entity_col, time_col):
+    """Run all three model specifications"""
+    
+    results = {}
+    
+    # Model 1: Pooled OLS (no fixed effects)
+    print("\nRunning Model 1: Pooled OLS...")
+    results[1] = run_pooled_ols(df, entity_col)
+    
+    # Model 2: Time FE (controls for quarter shocks)
+    print("Running Model 2: Time FE...")
+    results[2] = run_panel_fe(df, entity_col, time_col, bank_fe=False, time_fe=True)
+    
+    # Model 3: Bank + Time FE (controls for both)
+    print("Running Model 3: Bank + Time FE...")
+    results[3] = run_panel_fe(df, entity_col, time_col, bank_fe=True, time_fe=True)
+    
+    return results
 
-    Columns (exact):
-    - model
-    - specification
-    - dependent_variable
-    - independent_variable
-    - coef
-    - std_error
-    - t_stat
-    - p_value
-    - r2_adj_or_within
-    - n_obs
-    """
-    spec = {
+
+# ============================================================================
+# SAVE RESULTS
+# ============================================================================
+
+def save_results(results):
+    """Save regression results to CSV"""
+    
+    rows = []
+    spec_names = {
         1: "Pooled OLS",
         2: "Time FE",
-        3: "Bank+Time FE",
+        3: "Bank + Time FE"
     }
-    dep = "asset_growth"
-    indep = "book_lev_growth"
-
-    rows: list[dict[str, object]] = []
-    for k in (1, 2, 3):
-        r = results[k]
-        coef = float(r["coef"])
-        se = float(r["se"])
-        tstat = coef / se if np.isfinite(coef) and np.isfinite(se) and se != 0 else np.nan
-        pval = float(r["pvalue"])
-        r2 = None
-        if k == 1:
-            r2 = float(r["adj_r2"])
-        else:
-            r2_within = float(r.get("r2_within", np.nan))
-            r2 = r2_within if np.isfinite(r2_within) else float(r["adj_r2"])
-
-        rows.append(
-            {
-                "model": k,
-                "specification": spec[k],
-                "dependent_variable": dep,
-                "independent_variable": indep,
-                "coef": coef,
-                "std_error": se,
-                "t_stat": tstat,
-                "p_value": pval,
-                "r2_adj_or_within": r2,
-                "n_obs": int(r["nobs"]),
-            }
-        )
-
-    out = pd.DataFrame(
-        rows,
-        columns=[
-            "model",
-            "specification",
-            "dependent_variable",
-            "independent_variable",
-            "coef",
-            "std_error",
-            "t_stat",
-            "p_value",
-            "r2_adj_or_within",
-            "n_obs",
-        ],
-    )
-
-    OUTPUT_RESULTS_CSV.parent.mkdir(parents=True, exist_ok=True)
-    out.to_csv(OUTPUT_RESULTS_CSV, index=False)
+    
+    for model_num, res in results.items():
+        # Calculate t-statistic
+        t_stat = res['coef'] / res['se'] if res['se'] != 0 else np.nan
+        
+        rows.append({
+            'model': model_num,
+            'specification': spec_names[model_num],
+            'dependent_variable': 'asset_growth',
+            'independent_variable': 'leverage_growth',
+            'coef': res['coef'],
+            'std_error': res['se'],
+            't_stat': t_stat,
+            'p_value': res['pvalue'],
+            'r2': res['r2'],
+            'n_obs': res['nobs']
+        })
+    
+    results_df = pd.DataFrame(rows)
+    
+    # Save to CSV
+    OUTPUT_RESULTS.parent.mkdir(exist_ok=True)
+    results_df.to_csv(OUTPUT_RESULTS, index=False)
+    
+    return results_df
 
 
-def print_debug_head(df: pd.DataFrame, cols: list[str]) -> None:
+# ============================================================================
+# MAIN
+# ============================================================================
+
+def main():
     """
-    Only used if something fails: print 5 rows for relevant columns.
-    Keeps debugging targeted and avoids dumping the full dataset.
+    Main analysis pipeline:
+    1. Load balance sheet data
+    2. Calculate leverage and growth rates
+    3. Run three regression specifications
+    4. Display and save results
     """
-    cols_existing = [c for c in cols if c in df.columns]
-    if not cols_existing:
-        print(df.head(5).to_string(index=False))
-        return
-    print(df[cols_existing].head(5).to_string(index=False))
-
-
-def main() -> None:
-    # Guardrail: input must exist
-    if not ACCOUNTING_PATH.exists():
-        die(f"Missing accounting panel file: {ACCOUNTING_PATH}")
-
-    # Load accounting panel
-    df = pd.read_csv(ACCOUNTING_PATH)
-
-    # Detect panel keys
-    entity, time = detect_entity_time(df)
-
-    # Choose assets/equity/debt columns from available alternatives
-    assets_col = "total_assets_2" if "total_assets_2" in df.columns else pick_first_existing(df, ["total_assets", "assets"])
-    equity_col = "common_equity_total" if "common_equity_total" in df.columns else pick_first_existing(
-        df,
-        [
-            "common_equity_attributable_to_parent_shareholders",
-            "total_shareholders_equity",
-            "total_equity",
-            "equity_total",
-        ],
-    )
-    debt_col = "debt_total" if "debt_total" in df.columns else pick_first_existing(
-        df,
-        ["total_debt", "debt_including_finance_and_operating_lease_liabilities", "debt_long_term_total"],
-    )
-
-    # Guardrails: assets and equity are required for book leverage
-    if assets_col is None:
-        die("Missing assets column (tried total_assets_2, total_assets, assets).")
-    if equity_col is None:
-        die("Missing equity column (expected common_equity_total or similar).")
-
-    # Minimal terminal header
-    print(f"Loaded {ACCOUNTING_PATH} shape={df.shape}")
-    print(f"ENTITY={entity} TIME={time}")
-    print(f"Using: assets={assets_col}, equity={equity_col}, debt={debt_col}")
-    if MARKET_PATH.exists():
-        print("Market data: found -> not used (book-side only)")
+    
+    print("="*80)
+    print("ASSET GROWTH vs LEVERAGE GROWTH ANALYSIS")
+    print("="*80)
+    
+    # Step 1-2: Load data and create variables
+    df, entity_col, time_col = load_data()
+    df = prepare_variables(df, entity_col)
+    
+    # Save the constructed dataset (useful for checking)
+    OUTPUT_DATASET.parent.mkdir(exist_ok=True)
+    df.to_csv(OUTPUT_DATASET, index=False)
+    print(f"\nSaved analysis dataset to {OUTPUT_DATASET.name}")
+    
+    # Step 3: Run regressions
+    results = run_all_regressions(df, entity_col, time_col)
+    
+    # Step 4: Display results
+    print("\n" + "="*80)
+    print("REGRESSION RESULTS")
+    print("="*80)
+    print("\nDependent variable: Asset Growth (quarterly % change)")
+    print("Independent variable: Leverage Growth (quarterly % change)")
+    print("\nModels:")
+    print("  (1) Pooled OLS - simple regression")
+    print("  (2) Time FE - controls for quarter-specific shocks")
+    print("  (3) Bank + Time FE - controls for bank differences and quarter shocks")
+    print("\n" + "-"*80)
+    
+    # Print results table
+    for model_num in [1, 2, 3]:
+        res = results[model_num]
+        coef = res['coef']
+        se = res['se']
+        t_stat = coef / se if se != 0 else np.nan
+        stars = add_significance_stars(res['pvalue'])
+        
+        print(f"({model_num}) Coefficient: {coef:7.3f}{stars:3s}  SE: {se:6.3f}  t-stat: {t_stat:6.2f}  R²: {res['r2']:.3f}")
+    
+    print("-"*80)
+    print(f"N = {results[1]['nobs']} observations")
+    print("Significance: *** p<0.01, ** p<0.05, * p<0.10")
+    
+    # Interpret the main result
+    coef_fe = results[3]['coef']  # Bank + Time FE (most robust)
+    if coef_fe > 0:
+        print(f"\nInterpretation: β = {coef_fe:.3f} > 0 suggests PROCYCLICAL behavior")
+        print("  → When banks increase leverage, they also grow assets")
     else:
-        print("Market data: missing -> skipping (4)-(6)")
-
-    try:
-        # Clean keys and sort panel
-        df = df.copy()
-        df[entity] = df[entity].astype("string").str.strip()
-        df[time] = coerce_time(df[time], label="df")
-        df = df.sort_values([entity, time]).reset_index(drop=True)
-
-        # Build core numeric series
-        df["assets_used"] = coerce_numeric(df[assets_col])
-        df["equity_used"] = coerce_numeric(df[equity_col])
-        df["debt_used"] = coerce_numeric(df[debt_col]) if debt_col is not None else np.nan
-
-        # Book leverage = Assets / Equity (only where both are positive)
-        df["book_leverage"] = np.where(
-            df["assets_used"].notna()
-            & df["equity_used"].notna()
-            & (df["assets_used"] > 0)
-            & (df["equity_used"] > 0),
-            df["assets_used"] / df["equity_used"],
-            np.nan,
-        )
-
-        # Growth rates as quarterly log-differences (in percent)
-        df = log_diff_growth(df, entity=entity, value_col="assets_used", out_col="asset_growth")
-        df = log_diff_growth(df, entity=entity, value_col="book_leverage", out_col="book_lev_growth")
-
-        # Save the constructed dataset (useful for checking and reuse)
-        OUTPUT_DATASET_PATH.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(OUTPUT_DATASET_PATH, index=False)
-
-        # Regression sample (drop rows without both growth rates)
-        base = df[[entity, time, "asset_growth", "book_lev_growth"]].dropna().copy()
-        if base.empty:
-            raise ValueError("No valid observations after constructing growth rates.")
-
-        # Run the three book-side regressions
-        results: dict[int, dict[str, object]] = {}
-        results[1] = run_pooled_ols(base, y="asset_growth", x="book_lev_growth", entity=entity)
-        results[2] = run_panel_fe(base, y="asset_growth", x="book_lev_growth", entity=entity, time=time, entity_fe=False, time_fe=True)
-        results[3] = run_panel_fe(base, y="asset_growth", x="book_lev_growth", entity=entity, time=time, entity_fe=True, time_fe=True)
-
-        # Save book-side results (models 1-3) to CSV
-        save_results_csv(results)
-
-        # Compact, explicit terminal output (self-explanatory)
-        print("\nDependent variable: Asset growth (Δ log total assets, quarterly, %)")
-        print("Independent variable: Book leverage growth (Δ log assets / equity, quarterly, %)")
-        print("\nModels:")
-        print("(1) Pooled OLS")
-        print("(2) Time fixed effects")
-        print("(3) Bank + time fixed effects")
-
-        print("\nRESULTS:")
-        for k in (1, 2, 3):
-            r = results[k]
-            coef = float(r["coef"])
-            se = float(r["se"])
-            tstat = coef / se if np.isfinite(coef) and np.isfinite(se) and se != 0 else np.nan
-            stars = format_stars(float(r["pvalue"]))
-            print(f"({k}) coef = {coef:.3f}{stars}, se = {se:.3f}, t = {tstat:.2f}")
-
-        # Report R2 consistently: pooled uses adj R2, FE prefers within R2 if available
-        r2_1 = float(results[1]["adj_r2"])
-        r2_2 = float(results[2].get("r2_within", np.nan))
-        r2_3 = float(results[3].get("r2_within", np.nan))
-        if not np.isfinite(r2_2):
-            r2_2 = float(results[2]["adj_r2"])
-        if not np.isfinite(r2_3):
-            r2_3 = float(results[3]["adj_r2"])
-
-        print(f"R2 (adj for pooled; within for FE): {r2_1:.3f} {r2_2:.3f} {r2_3:.3f}")
-        print(f"N (observations): {int(results[1]['nobs'])} {int(results[2]['nobs'])} {int(results[3]['nobs'])}")
-
-    except Exception as e:
-        # If anything fails, print a minimal debug preview (5 rows) and re-raise.
-        print(f"ERROR: {type(e).__name__}: {e}")
-        print("Debug preview (5 rows, relevant columns):")
-        print_debug_head(
-            df,
-            [
-                entity,
-                time,
-                assets_col,
-                equity_col,
-                debt_col if debt_col is not None else "",
-                "assets_used",
-                "equity_used",
-                "book_leverage",
-                "asset_growth",
-                "book_lev_growth",
-            ],
-        )
-        raise
+        print(f"\nInterpretation: β = {coef_fe:.3f} < 0 suggests COUNTERCYCLICAL behavior")
+        print("  → When banks increase leverage, they reduce assets")
+    
+    # Save results
+    results_df = save_results(results)
+    print(f"\nResults saved to {OUTPUT_RESULTS.name}")
+    print("\n" + "="*80)
 
 
 if __name__ == "__main__":
