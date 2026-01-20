@@ -17,7 +17,7 @@ Pipeline:
    - Pooled (benchmark): no bank FE, SE clustered by bank
 Outputs:
 - Prints sanity checks + results table
-- Saves results to output/fe_results.csv (and a legacy copy to output/Model_1_result.csv)
+- Saves results to output/Model_1_result.csv
 """
 
 from __future__ import annotations
@@ -45,8 +45,7 @@ RISK_REGRESSOR_LEVEL = "log_var_95_level"
 
 BASE_PATH = Path("output/merged_quarterly_balanced.csv")
 VAR_PATH = Path("output/merged_with_var_95_approx.csv")
-OUTPUT_PATH = Path("output/fe_results.csv")
-LEGACY_OUTPUT_PATH = Path("output/Model_1_result.csv")
+OUTPUT_PATH = Path("output/Model_1_result.csv")
 
 # Harmonize bank identifiers across sources to ensure a correct merge on (bank_id, period_end_date).
 BANK_ID_MAP: dict[str, str] = {
@@ -405,7 +404,6 @@ def main() -> None:
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     results.to_csv(OUTPUT_PATH, index=False)
-    results.to_csv(LEGACY_OUTPUT_PATH, index=False)
 
 
 if __name__ == "__main__":
