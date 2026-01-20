@@ -17,7 +17,7 @@ Pipeline:
    - Pooled (benchmark): no bank FE, SE clustered by bank
 Outputs:
 - Prints sanity checks + results table
-- Saves results to output/fe_results.csv
+- Saves results to output/fe_results.csv (and a legacy copy to output/Model_1_result.csv)
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ RISK_REGRESSOR_LEVEL = "log_var_95_level"
 BASE_PATH = Path("output/merged_quarterly_balanced.csv")
 VAR_PATH = Path("output/merged_with_var_95_approx.csv")
 OUTPUT_PATH = Path("output/fe_results.csv")
+LEGACY_OUTPUT_PATH = Path("output/Model_1_result.csv")
 
 # Harmonize bank identifiers across sources to ensure a correct merge on (bank_id, period_end_date).
 BANK_ID_MAP: dict[str, str] = {
@@ -62,10 +63,12 @@ RESULT_COLUMNS = [
     "model_name",
     "dep_var",
     "regressor_name",
+    "const",
     "beta",
     "se",
     "t",
     "pvalue",
+    "r2",
     "n_obs",
     "n_banks",
     "n_periods",
@@ -313,15 +316,26 @@ def run_fe(df: pd.DataFrame, dep_var: str, regressor: str, model_name: str) -> d
         # Rare edge case: regressor can be absorbed by fixed effects under certain toggles
         die(f"FE estimation failed for {model_name}: {e}")
 
+    const = np.nan
+    if hasattr(res, "estimated_effects") and res.estimated_effects is not None:
+        # PanelOLS does not estimate a standalone intercept with fixed effects. We report an
+        # implied constant as the average of the estimated fixed effects (entity, and time if enabled).
+        try:
+            const = float(res.estimated_effects.iloc[:, 0].mean())
+        except Exception:
+            const = np.nan
+
     return {
         "estimator": "FE",
         "model_name": model_name,
         "dep_var": dep_var,
         "regressor_name": regressor,
+        "const": float(const) if np.isfinite(const) else np.nan,
         "beta": float(res.params[regressor]),
         "se": float(res.std_errors[regressor]),
         "t": float(res.tstats[regressor]),
         "pvalue": float(res.pvalues[regressor]),
+        "r2": float(getattr(res, "rsquared_within", res.rsquared)),
         "n_obs": int(res.nobs),
         "n_banks": n_banks,
         "n_periods": n_periods,
@@ -336,7 +350,8 @@ def run_pooled(df: pd.DataFrame, dep_var: str, regressor: str, model_name: str) 
 
     model_df = model_df.set_index(["bank_id", "period_end_date"])
     y = model_df[[dep_var]]
-    X = model_df[[regressor]]
+    X = model_df[[regressor]].copy()
+    X.insert(0, "const", 1.0)
 
     n_obs = int(len(model_df))
     n_banks = int(model_df.index.get_level_values(0).nunique())
@@ -350,10 +365,12 @@ def run_pooled(df: pd.DataFrame, dep_var: str, regressor: str, model_name: str) 
         "model_name": model_name,
         "dep_var": dep_var,
         "regressor_name": regressor,
+        "const": float(res.params["const"]),
         "beta": float(res.params[regressor]),
         "se": float(res.std_errors[regressor]),
         "t": float(res.tstats[regressor]),
         "pvalue": float(res.pvalues[regressor]),
+        "r2": float(res.rsquared),
         "n_obs": int(res.nobs),
         "n_banks": n_banks,
         "n_periods": n_periods,
@@ -388,6 +405,7 @@ def main() -> None:
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     results.to_csv(OUTPUT_PATH, index=False)
+    results.to_csv(LEGACY_OUTPUT_PATH, index=False)
 
 
 if __name__ == "__main__":
