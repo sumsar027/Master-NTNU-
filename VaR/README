@@ -1,1 +1,41 @@
+# VaR variables used in the analysis
+
+This dataset contains Value-at-Risk (VaR) measures used for empirical analysis
+and figure construction.
+
+The VaR measures differ by how 99% VaR is constructed from reported 95% VaR.
+
+---
+
+## var_95
+- Reported 95% Value-at-Risk from banks' regulatory disclosures.
+- Serves as the raw input for constructing alternative 99% VaR measures.
+
+---
+
+## var_99_gauss
+- 99% Value-at-Risk constructed using a Gaussian scaling rule:
+
+  var_99_gauss = var_95 × 1.414
+
+- This method assumes normally distributed returns.
+- Included mainly for comparison with the standard textbook approximation.
+
+---
+
+## var_99_x2
+- 99% Value-at-Risk constructed using a simple scaling rule:
+
+  var_99_x2 = var_95 × 2.0
+
+- This method does not rely on distributional assumptions.
+- Empirically matches reported VaR 99 more closely in the data,
+  with lower prediction error than the Gaussian method.
+- Used as the **preferred 99% VaR measure** in figures and regressions.
+
+---
+
+## Recommended usage
+- Use `var_99_x2` as the main VaR measure.
+- Use `var_99_gauss` for robustness checks and methodological comparison.
 
