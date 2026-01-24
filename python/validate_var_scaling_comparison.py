@@ -12,6 +12,7 @@ Creates comprehensive visualizations showing:
 - Error analysis
 """
 
+from sklearn.metrics import r2_score, mean_squared_error
 from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -28,7 +29,7 @@ plt.rcParams["savefig.dpi"] = 300
 # =============================================================================
 # Conversion factors
 # =============================================================================
-GAUSSIAN_RATIO = 1.4144   # z_0.99 / z_0.95
+GAUSSIAN_RATIO = 1.41421356237   # z_0.99 / z_0.95
 BOA_FACTOR = 2.0
 
 # =============================================================================
@@ -122,7 +123,6 @@ plt.setp(ax1.get_xticklabels(), rotation=45, ha="right")
 # -----------------------------------------------------------------------------
 # (2) Scatter – Gaussian
 # -----------------------------------------------------------------------------
-from sklearn.metrics import r2_score, mean_squared_error
 
 ax2 = fig.add_subplot(gs[1, 0])
 
