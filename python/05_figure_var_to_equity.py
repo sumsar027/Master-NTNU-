@@ -57,7 +57,7 @@ PRE_END = pd.Timestamp("2019-12-31")
 # -----------------------------
 # Column choices
 # -----------------------------
-EQUITY_COL = "total_shareholders_equity"
+EQUITY_COL = "common_equity_total"
 
 EQUITY_CANDIDATES = [
     EQUITY_COL,
