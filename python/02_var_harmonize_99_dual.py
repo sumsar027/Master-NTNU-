@@ -28,7 +28,7 @@ import pandas as pd
 # Fixed settings for this exact Excel setup (no CLI args; edit here if needed).
 INPUT_FILE = Path("data/raw/VaR_python.xlsx")
 DATE_COL = "year"
-OUTPUT_FILE = Path("output/data/merged_with_var_99_dual_methods.csv")
+OUTPUT_FILE = Path("output/merged_with_var_99_dual_methods.csv")
 
 # Standard normal quantiles for 95% and 99% confidence levels
 Z_095 = 1.6448536269514722
@@ -247,25 +247,28 @@ def main() -> int:
     print(f"approx_from_95_boa (converted using {BOA_FACTOR:.1f}): {n_approx_boa:,}")
     print(f"missing_both (no data available): {n_missing_both:,}")
 
-    # 6) Save to CSV (one row per bank per quarter).
+    # 6) Save to CSV - UPDATED COLUMN ORDER
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     out[
         [
             "bank_id",
             "period_end_date",
             "var_95",
-            "var_99",
-            "var_99_gaussian",
-            "var_99_boa_factor",
-            "var_99_harmonized",
+            "var_99",  # Original 99% values (when reported)
+            "var_99_gaussian",  # Harmonized using Gaussian method
+            "var_99_boa_factor",  # Harmonized using BoA factor
             "var_99_source_gaussian",
             "var_99_source_boa",
-            "var_99_source",
             "var_level_dummy_99",
         ]
     ].to_csv(OUTPUT_FILE, index=False)
     print(f"\nSaved: {OUTPUT_FILE}")
-    print(f"Output columns: bank_id, period_end_date, var_95, var_99, var_99_gaussian, var_99_boa_factor, var_99_harmonized, var_99_source_gaussian, var_99_source_boa, var_99_source, var_level_dummy_99")
+    print(f"Output columns: bank_id, period_end_date, var_95, var_99, var_99_gaussian, var_99_boa_factor, var_99_source_gaussian, var_99_source_boa, var_level_dummy_99")
+    print("\nColumn descriptions:")
+    print("  - var_95: Original 95% VaR (when reported)")
+    print("  - var_99: Original 99% VaR (when reported)")
+    print("  - var_99_gaussian: Harmonized 99% VaR using Gaussian conversion (×1.4144)")
+    print("  - var_99_boa_factor: Harmonized 99% VaR using BoA factor (×2.0)")
     return 0
 
 

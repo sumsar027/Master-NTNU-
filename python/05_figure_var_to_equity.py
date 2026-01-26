@@ -5,7 +5,7 @@ for 2014Q1–2025Q3, using:
 - VaR/E   = VaR / Book Equity
 - Leverage = Assets / Book Equity
 
-Uses harmonized 99% VaR from Gaussian conversion.
+Uses harmonized 99% VaR with BoA factor (×2) for banks without reported 99% VaR.
 
 Key changes vs original:
 1) Uses ratios in LEVELS (not log-ratios).
@@ -13,10 +13,11 @@ Key changes vs original:
 3) Value-weighted average with LAGGED assets as weights.
 4) Filters sample to 2014Q1–2025Q3.
 5) Uses 99% VaR (instead of 95%).
+6) Prioritizes var_99_boa_factor (uses reported 99% + factor ×2 conversion).
 
 Inputs:
 - output/merged_quarterly_balanced.csv
-- output/merged_with_var_99_approx.csv
+- output/merged_with_var_99_dual_methods.csv
 
 """
 
@@ -31,8 +32,8 @@ import pandas as pd
 # -----------------------------
 # Paths
 # -----------------------------
-BASE_FILE = Path("output/data/merged_quarterly_balanced.csv")
-VAR_FILE = Path("output/data/merged_with_var_99_dual_methods.csv")
+BASE_FILE = Path("data/processed/merged_quarterly_balanced.csv")
+VAR_FILE = Path("output/merged_with_var_99_dual_methods.csv")
 
 # -----------------------------
 # Bank ID harmonization
@@ -71,8 +72,8 @@ EQUITY_CANDIDATES = [
 
 ASSET_CANDIDATES = ["total_assets_2", "total_assets", "assets"]
 
-# Updated to use 99% VaR columns
-VAR99_CANDIDATES = ["var_99_x2", "var_99_gauss", "var_99_harmonized", "var_99_level", "var_99", "var_99_approx"]
+# Prioritize var_99_boa_factor (uses reported 99% + factor ×2 conversion)
+VAR99_CANDIDATES = ["var_99_boa_factor", "var_99_x2", "var_99_gauss", "var_99_harmonized", "var_99_level", "var_99", "var_99_approx"]
 
 
 def _require_columns(df: pd.DataFrame, cols: list[str], *, where: str) -> None:
@@ -177,11 +178,12 @@ def load_df_from_project_outputs(
     base = base.dropna(subset=["bank_id", "period_end_date"])
     var = var.dropna(subset=["bank_id", "period_end_date"])
 
-    # Choose 99% VaR column
+    # Choose 99% VaR column (prioritizes var_99_boa_factor)
     var99_col = _find_column(var, VAR99_CANDIDATES)
     if var99_col is None:
         raise KeyError(f"Missing VaR column in var file. Expected one of: {VAR99_CANDIDATES}")
 
+    print(f"Using VaR column: {var99_col}")
     var[var99_col] = _to_numeric(var[var99_col])
 
     # Merge
@@ -240,6 +242,7 @@ def load_df_from_project_outputs(
             f"Rows: start={n0}, after_dropna={n_dropna}, after_positive_filter={n_pos}."
         )
 
+    print(f"Loaded {len(df)} observations for {df['bank_id'].nunique()} banks")
     return df
 
 
@@ -317,7 +320,7 @@ def plot_adrian_shin_figure_5(df: pd.DataFrame):
     ax.plot(g["quarter"], g["leverage"], color="tab:green", linestyle="--", linewidth=2.5, label="Leverage", zorder=2)
     ax.plot(g["quarter"], g["var_to_equity"], color="tab:red", linestyle="-", linewidth=2.5, label="VaR/E (99%)", zorder=3)
 
-    ax.set_title("Risk and balance sheet adjustment (99% VaR)")
+    ax.set_title("Risk and balance sheet adjustment (99% VaR, BoA factor)")
     ax.set_ylabel("Pre-Period Standard Deviations")
     ax.legend(loc="upper left", frameon=False)
 
@@ -342,13 +345,12 @@ def main() -> None:
 
     out_dir = Path("output/figures")
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "figure5_var99.png"
+    out_path = out_dir / "figure5_var99_boa.png"
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     print(f"Saved: {out_path.resolve()}")
 
     import matplotlib.pyplot as plt
     plt.show()
-
 
 
 if __name__ == "__main__":
