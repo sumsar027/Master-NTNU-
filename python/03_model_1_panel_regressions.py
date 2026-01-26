@@ -64,13 +64,15 @@ def load_data():
     base['period_end_date'] = pd.to_datetime(base['period_end_date'])
     var['period_end_date']  = pd.to_datetime(var['period_end_date'])
 
-    # Create VaR level using var_99_harmonized (main Gaussian-based series in your file)
-    if 'var_99_harmonized' in var.columns:
-        var['var_99_level'] = var['var_99_harmonized']
-    elif 'var_99' in var.columns:
-        var['var_99_level'] = var['var_99'].fillna(var.get('var_99_approx', np.nan))
+       # Create VaR level using reported 99% when available, otherwise Gaussian-converted 99%
+    if 'var_99' in var.columns:
+        var['var_99_level'] = var['var_99']
     else:
-        var['var_99_level'] = var['var_99_approx']
+        var['var_99_level'] = np.nan
+
+    if 'var_99_gaussian' in var.columns:
+        var['var_99_level'] = var['var_99_level'].fillna(var['var_99_gaussian'])
+
 
     # Check for missing VaR values
     print(f"\nVaR data: {var['var_99_level'].notna().sum()} non-missing values out of {len(var)}")
