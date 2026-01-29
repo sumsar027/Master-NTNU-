@@ -1,27 +1,22 @@
 """
-Replicate Adrian & Shin Figure 5-style plot (risk + balance sheet adjustment),
-for 2014Q1–2025Q3, using:
-- Unit VaR  = VaR / Assets
-- VaR/E     = VaR / Book common equity
-- Leverage  = Assets / Book common equity
+Figure: VaR and balance sheet levels (NO standardization)
 
-Uses harmonized 99% VaR with BoA factor (×2) for banks without reported 99% VaR.
+Creates a Figure 5-style diagnostic plot for 2014Q1–2025Q3 using LEVELS:
+- VaR (99%) level (harmonized via BoA factor inside var_99_boa_factor)
+- Total Assets (level)
+- Book common equity (level)
+- Liabilities (level) = Assets - Equity
 
-Key choices:
-1) Uses ratios in LEVELS (not log-ratios).
-2) Standardizes relative to PRE-PERIOD (default: 2014Q1–2019Q4).
-3) Value-weighted average with LAGGED assets as weights.
-4) Filters sample to 2014Q1–2025Q3.
-5) Uses 99% VaR.
-6) Uses var_99_boa_factor (reported 99% VaR when available; otherwise ×2 conversion).
-7) Standardize per bank first, then aggregate across banks.
+Aggregation:
+- Value-weighted average across banks each quarter
+- Weights: lagged assets (previous quarter)
 
 Inputs:
 - data/processed/merged_quarterly_balanced.csv
 - output/data/merged_with_var_99_dual_methods.csv
 
 Output:
-- output/figures/figure5_var99_boa.png
+- output/figures/figure_levels_var_and_liabilities.png
 """
 
 from __future__ import annotations
@@ -49,9 +44,6 @@ VAR99_COL = "var_99_boa_factor"
 # -----------------------------
 SAMPLE_START = pd.Timestamp("2014-03-31")  # 2014Q1 quarter-end
 SAMPLE_END = pd.Timestamp("2025-09-30")    # 2025Q3 quarter-end
-
-PRE_START = pd.Timestamp("2014-03-31")
-PRE_END = pd.Timestamp("2019-12-31")
 
 
 def normalize_bank_id(bank_id: str) -> str:
@@ -144,7 +136,7 @@ def load_df_from_project_outputs(
     base_file: Path = BASE_FILE,
     var_file: Path = VAR_FILE,
 ) -> pd.DataFrame:
-    """Load and merge balance sheet data with 99% VaR data (fixed column definitions)."""
+    """Load and merge balance sheet data with 99% VaR data (fixed definitions)."""
 
     if not base_file.exists():
         raise FileNotFoundError(f"Missing file: {base_file}")
@@ -234,25 +226,19 @@ def load_df_from_project_outputs(
     )
 
     # Clean
-    n0 = len(df)
     df = df.dropna(subset=["bank_id", "quarter", "assets", "equity", "var99"])
-    n_dropna = len(df)
     df = df[(df["assets"] > 0) & (df["equity"] > 0) & (df["var99"] > 0)].copy()
-    n_pos = len(df)
-
     df = df.sort_values(["bank_id", "quarter"]).reset_index(drop=True)
 
     if df.empty:
-        raise ValueError(
-            f"No valid rows after cleaning. Rows: start={n0}, after_dropna={n_dropna}, after_positive_filter={n_pos}."
-        )
+        raise ValueError("No valid rows after cleaning.")
 
     print(f"Loaded {len(df)} observations for {df['bank_id'].nunique()} banks")
     return df
 
 
-def plot_adrian_shin_figure_5(df: pd.DataFrame):
-    """Create Figure 5-style plot using fixed 99% VaR (BoA factor) and fixed balance sheet definitions."""
+def plot_levels_var_and_liabilities(df: pd.DataFrame):
+    """Plot value-weighted LEVELS: Assets, Liabilities, Equity (left axis) and VaR (right axis)."""
 
     _require_columns(df, ["bank_id", "quarter", "assets", "equity", "var99"], where="df")
 
@@ -268,42 +254,12 @@ def plot_adrian_shin_figure_5(df: pd.DataFrame):
     d["quarter"] = _to_datetime(d["quarter"])
     d = d.sort_values(["bank_id", "quarter"]).reset_index(drop=True)
 
-    # Ratios per bank-quarter
-    d["unit_var"] = d["var99"] / d["assets"]
-    d["var_to_equity"] = d["var99"] / d["equity"]
-    d["leverage"] = d["assets"] / d["equity"]
+    # Construct liabilities as A - E (book identity)
+    d["liabilities"] = d["assets"] - d["equity"]
 
     # Lagged assets for value-weighting
     d["assets_lag"] = d.groupby("bank_id", sort=False)["assets"].shift(1)
 
-    # --- Standardize per bank relative to PRE-period ---
-    pre_mask_bank = (d["quarter"] >= PRE_START) & (d["quarter"] <= PRE_END)
-    if int(pre_mask_bank.sum()) == 0:
-        raise ValueError("Pre-period is empty on bank-level data (before aggregation).")
-
-    cols_to_std = ["unit_var", "leverage", "var_to_equity", "equity"]
-
-    def _zscore_within_bank(grp: pd.DataFrame) -> pd.DataFrame:
-        out = grp.copy()
-        pre = out.loc[pre_mask_bank.loc[out.index], cols_to_std]
-
-        if pre.empty:
-            for c in cols_to_std:
-                out[c] = np.nan
-            return out
-
-        for c in cols_to_std:
-            mu = float(pre[c].mean())
-            sd = float(pre[c].std())
-            if (not np.isfinite(mu)) or (not np.isfinite(sd)) or sd == 0.0:
-                out[c] = np.nan
-            else:
-                out[c] = (out[c] - mu) / sd
-        return out
-
-    d = d.groupby("bank_id", group_keys=False).apply(_zscore_within_bank, include_groups=False)
-
-    # --- Aggregate across banks (value-weighted by lagged assets) ---
     def _weighted_mean(values: pd.Series, weights: pd.Series) -> float:
         ok = values.notna() & weights.notna() & np.isfinite(weights) & (weights > 0)
         if int(ok.sum()) == 0:
@@ -314,10 +270,10 @@ def plot_adrian_shin_figure_5(df: pd.DataFrame):
         w = grp["assets_lag"]
         return pd.Series(
             {
-                "unit_var": _weighted_mean(grp["unit_var"], w),
-                "leverage": _weighted_mean(grp["leverage"], w),
-                "var_to_equity": _weighted_mean(grp["var_to_equity"], w),
+                "assets": _weighted_mean(grp["assets"], w),
+                "liabilities": _weighted_mean(grp["liabilities"], w),
                 "equity": _weighted_mean(grp["equity"], w),
+                "var99": _weighted_mean(grp["var99"], w),
             }
         )
 
@@ -325,37 +281,37 @@ def plot_adrian_shin_figure_5(df: pd.DataFrame):
         d.groupby("quarter", as_index=False)
         .apply(_agg, include_groups=False)
         .sort_values("quarter")
-        .dropna(subset=["unit_var", "leverage", "var_to_equity"])
+        .dropna(subset=["assets", "liabilities", "equity", "var99"])
         .reset_index(drop=True)
     )
 
     if g.empty:
-        raise ValueError("No valid observations after aggregation of standardized series.")
+        raise ValueError("No valid observations after aggregation.")
 
-    # --- Plot ---
     fig, ax = plt.subplots(figsize=(10.5, 5.6))
-    ax.axhspan(-2, 2, color="0.85", zorder=0)
-    ax.axhline(0, color="black", linewidth=1.0, zorder=1)
 
-    ax.plot(g["quarter"], g["unit_var"], color="tab:blue", linestyle="--", linewidth=2.5, label="Unit VaR (99%)", zorder=2)
-    ax.plot(g["quarter"], g["leverage"], color="tab:green", linestyle="--", linewidth=2.5, label="Leverage", zorder=2)
-    ax.plot(g["quarter"], g["var_to_equity"], color="tab:red", linestyle="-", linewidth=2.5, label="VaR/E (99%)", zorder=3)
-    ax.plot(g["quarter"], g["equity"], color="tab:purple", linestyle=":", linewidth=2.5, label="Equity (standardized)", zorder=2)
+    # Left axis: balance sheet levels
+    ax.plot(g["quarter"], g["assets"], linestyle="-", linewidth=2.0, label="Total Assets (VW, level)")
+    ax.plot(g["quarter"], g["liabilities"], linestyle="--", linewidth=2.0, label="Liabilities = Assets − Equity (VW, level)")
+    ax.plot(g["quarter"], g["equity"], linestyle=":", linewidth=2.5, label="Book Common Equity (VW, level)")
 
-    ax.set_title("Risk and balance sheet adjustment (99% VaR, BoA factor)")
-    ax.set_ylabel("Pre-Period Standard Deviations")
+    ax.set_title("VaR and balance sheet levels (value-weighted, no standardization)")
+    ax.set_ylabel("Balance sheet levels (left axis)")
     ax.legend(loc="upper left", frameon=False)
 
     ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[6, 12]))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
     plt.setp(ax.get_xticklabels(), rotation=90, ha="center")
 
-    ax.set_ylim(-15, 10)
-
+    # Right axis: VaR level
     ax2 = ax.twinx()
-    ax2.set_ylim(ax.get_ylim())
-    ax2.set_yticks(ax.get_yticks())
-    ax2.set_ylabel("")
+    ax2.plot(g["quarter"], g["var99"], linestyle="-.", linewidth=2.2, label="VaR (99%, VW, level)")
+    ax2.set_ylabel("VaR level (right axis)")
+
+    # Combine legends (left + right)
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False)
 
     fig.tight_layout()
     return fig
@@ -363,11 +319,11 @@ def plot_adrian_shin_figure_5(df: pd.DataFrame):
 
 def main() -> None:
     df = load_df_from_project_outputs()
-    fig = plot_adrian_shin_figure_5(df)
+    fig = plot_levels_var_and_liabilities(df)
 
     out_dir = Path("output/figures")
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "figure5_var99_boa.png"
+    out_path = out_dir / "figure_levels_var_and_liabilities.png"
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     print(f"Saved: {out_path.resolve()}")
 
