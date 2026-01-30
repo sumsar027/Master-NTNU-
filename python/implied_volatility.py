@@ -1,284 +1,246 @@
 """
-Replicate Adrian & Shin Figure 4-style plot: Implied volatility vs Unit VaR.
+Replicate Adrian & Shin Figure 4-style plot: implied volatility vs Unit VaR.
 
-Inputs:
-- VIX CSV from FRED (e.g. data/raw/VIXCLS (1).csv). Can be daily/monthly/quarterly.
-- Bank panel + VaR merge already used by figure_var_to_equity_ratio.py:
-  - data/processed/merged_quarterly_balanced.csv
-  - output/data/merged_with_var_99_dual_methods.csv
+Objective
+---------
+Produce a quarterly time-series figure comparing:
+1) Market-based risk proxy: implied volatility (VIX)
+2) Balance-sheet-based risk proxy: Unit VaR = VaR(99%) / Total Assets
 
-Method:
-1) Compute Unit VaR per bank = VaR(99%) / Assets
-2) Standardize within bank relative to PRE period (default: 2014Q1–2019Q4)
-3) Aggregate across banks using value-weighted mean (weights = lagged assets)
-4) Convert VIX to quarterly frequency and standardize relative to the same PRE period
-5) Plot both standardized series with ±2 band around zero
+Both series are standardized relative to a common PRE period (2014Q1–2019Q4):
+    z_t = (x_t - mean_pre) / std_pre
+
+This matches the logic of plotting "deviations from normal times" using a
+pre-crisis baseline.
+
+Inputs
+------
+- Daily VIX from FRED CSV (e.g., data/raw/VIXCLS.csv)
+- Bank-quarter panel + VaR from our pipeline (load_df_from_project_outputs)
+
+Method
+------
+A) Unit VaR (bank panel):
+   1) unit_var_{i,t} = var99_{i,t} / assets_{i,t}
+   2) Standardize within bank using that bank's PRE-period mean and std
+   3) Aggregate across banks each quarter using value weights (lagged assets)
+
+B) VIX (market series):
+   1) Convert daily VIX to quarterly mean
+   2) Standardize using the same PRE period
+
+C) Merge on quarter-end dates and plot both standardized series with a ±2 band.
+
+Output
+------
+output/figures/implied_vol_vs_unit_var.png
 """
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from pathlib import Path
-import argparse
-import os
-import tempfile
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from pathlib import Path
 
-
-# Reuse the same dates + loader as the Unit VaR figure.
-#
-# When this file is run as a script (e.g. `python src/pipeline/implied_volatility.py`),
-# Python puts `src/pipeline` on sys.path, so we can import siblings directly.
-# When run as a module (e.g. `PYTHONPATH=src python -m pipeline.implied_volatility`),
-# we want the package import.
-try:  # pragma: no cover
+# Import sample boundaries and the bank-panel loader from the existing figure script
+try:
     from pipeline.figure_var_to_equity_ratio import (
-        PRE_END,
-        PRE_START,
-        SAMPLE_END,
-        SAMPLE_START,
-        load_df_from_project_outputs,
+        PRE_END, PRE_START, SAMPLE_END, SAMPLE_START, load_df_from_project_outputs
     )
-except ModuleNotFoundError:  # pragma: no cover
-    from figure_var_to_equity_ratio import (  # type: ignore
-        PRE_END,
-        PRE_START,
-        SAMPLE_END,
-        SAMPLE_START,
-        load_df_from_project_outputs,
+except ModuleNotFoundError:
+    from figure_var_to_equity_ratio import (
+        PRE_END, PRE_START, SAMPLE_END, SAMPLE_START, load_df_from_project_outputs
     )
-except Exception as e:  # pragma: no cover
-    raise ImportError("Could not import from figure_var_to_equity_ratio.") from e
 
 
-DEFAULT_VIX_FILE = Path("data/raw/VIXCLS (1).csv")
-DEFAULT_OUT_FILE = Path("output/figures/implied_vol_vs_unit_var.png")
+# ============================================================================
+# VIX: load daily data, convert to quarterly mean, standardize to PRE
+# ============================================================================
 
+def load_vix_data(vix_filepath: Path) -> pd.DataFrame:
+    """
+    Load daily VIX data from a FRED-style CSV.
 
-def _ensure_matplotlib_cache_dir() -> None:
-    # Matplotlib sometimes tries to create config/cache dirs.
-    # Prefer a project-local dir if MPLCONFIGDIR isn't set.
-    if "MPLCONFIGDIR" in os.environ:
-        return
+    The function is robust to minor differences in column names across downloads:
+    - identifies the date column by searching for 'date' in the column name
+    - identifies the VIX column by checking common names (VIXCLS, VIX)
+    """
+    raw = pd.read_csv(vix_filepath)
 
-    candidates: list[Path] = [
-        Path("output") / ".mplconfig",
-    ]
-    for p in candidates:
-        try:
-            p.mkdir(parents=True, exist_ok=True)
-            os.environ["MPLCONFIGDIR"] = str(p)
-            return
-        except OSError:
-            continue
+    # Identify date column (fallback: first column)
+    date_col = next((c for c in raw.columns if "date" in c.lower()), raw.columns[0])
 
-    # Fallback to OS temp if available/writable
-    try:
-        base_tmp = tempfile.gettempdir()
-        p = Path(base_tmp) / "mplconfig"
-        p.mkdir(parents=True, exist_ok=True)
-        os.environ["MPLCONFIGDIR"] = str(p)
-    except Exception:
-        # If we can't set a writable dir, matplotlib may fail at import time.
-        return
+    # Identify VIX value column (fallback: first non-date column)
+    candidates = ["VIXCLS", "vixcls", "VIX", "vix"]
+    value_col = next((c for c in candidates if c in raw.columns),
+                     [c for c in raw.columns if c != date_col][0])
 
+    vix = raw[[date_col, value_col]].copy()
+    vix.columns = ["date", "vix"]
 
-def _find_date_col(df: pd.DataFrame) -> str:
-    for c in df.columns:
-        if "date" in str(c).lower():
-            return c
-    return str(df.columns[0])
-
-
-def _find_value_col(df: pd.DataFrame, date_col: str) -> str:
-    # Common FRED names
-    for c in ["VIXCLS", "vixcls", "vix", "VIX"]:
-        if c in df.columns:
-            return c
-    # Fallback: first non-date column
-    for c in df.columns:
-        if c != date_col:
-            return str(c)
-    raise ValueError("Could not identify value column in VIX CSV.")
-
-
-def _to_numeric(series: pd.Series) -> pd.Series:
-    if pd.api.types.is_numeric_dtype(series):
-        return series.astype(float)
-    s = series.astype(str).str.strip()
-    s = s.replace({".": np.nan, "": np.nan, "NA": np.nan, "N/A": np.nan, "nan": np.nan, "None": np.nan})
-    s = s.str.replace(",", "", regex=False)
-    return pd.to_numeric(s, errors="coerce")
-
-
-def load_vix_csv(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing VIX file: {path}")
-    raw = pd.read_csv(path)
-    if raw.empty:
-        raise ValueError(f"VIX file is empty: {path}")
-
-    date_col = _find_date_col(raw)
-    value_col = _find_value_col(raw, date_col=date_col)
-
-    vix = raw[[date_col, value_col]].rename(columns={date_col: "date", value_col: "vix"}).copy()
     vix["date"] = pd.to_datetime(vix["date"], errors="coerce")
-    vix["vix"] = _to_numeric(vix["vix"])
-    vix = vix.dropna(subset=["date", "vix"]).sort_values("date").reset_index(drop=True)
-    if vix.empty:
-        raise ValueError(f"No usable rows in VIX file after parsing: {path}")
+    vix["vix"] = pd.to_numeric(vix["vix"], errors="coerce")
+
+    vix = vix.dropna().sort_values("date").reset_index(drop=True)
     return vix
 
 
-def vix_to_quarterly(vix: pd.DataFrame) -> pd.DataFrame:
-    d = vix.copy()
-    d["quarter"] = d["date"].dt.to_period("Q").dt.to_timestamp(how="end").dt.normalize()
-    q = d.groupby("quarter", as_index=False)["vix"].mean().sort_values("quarter").reset_index(drop=True)
-    return q
+def convert_vix_to_quarterly_mean(vix_daily: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert daily VIX to quarterly frequency using the within-quarter mean.
+
+    Critical detail:
+    - we map each observation to the QUARTER-END date and normalize time to 00:00:00
+      to ensure exact matching when merging with bank panel quarters.
+    """
+    df = vix_daily.copy()
+    df["quarter"] = (
+        df["date"]
+        .dt.to_period("Q")
+        .dt.to_timestamp(how="end")
+        .dt.normalize()
+    )
+    quarterly = df.groupby("quarter", as_index=False)["vix"].mean()
+    quarterly = quarterly.sort_values("quarter").reset_index(drop=True)
+    return quarterly
 
 
 def standardize_to_pre_period(df: pd.DataFrame, value_col: str) -> pd.DataFrame:
-    d = df.copy()
-    pre = d[(d["quarter"] >= PRE_START) & (d["quarter"] <= PRE_END)][value_col]
-    if pre.empty:
-        raise ValueError(f"Pre-period is empty for {value_col}. Check dates in your VIX file.")
-    mu = float(pre.mean())
-    sd = float(pre.std())
-    if (not np.isfinite(mu)) or (not np.isfinite(sd)) or sd == 0.0:
-        raise ValueError(f"Cannot standardize {value_col}: mean/std not finite (mu={mu}, sd={sd}).")
-    d[value_col] = (d[value_col] - mu) / sd
-    return d
+    """
+    Standardize df[value_col] to PRE period moments:
+        z = (x - mean_pre) / std_pre
+
+    If std_pre is zero or missing, we set the series to NaN to avoid silent infinities.
+    """
+    pre_mask = (df["quarter"] >= PRE_START) & (df["quarter"] <= PRE_END)
+    pre_values = df.loc[pre_mask, value_col]
+
+    mean_pre = pre_values.mean()
+    std_pre = pre_values.std()
+
+    if pd.isna(std_pre) or std_pre == 0:
+        df[value_col] = np.nan
+        return df
+
+    df[value_col] = (df[value_col] - mean_pre) / std_pre
+    return df
 
 
-def _weighted_mean(values: pd.Series, weights: pd.Series) -> float:
-    ok = values.notna() & weights.notna() & np.isfinite(weights) & (weights > 0)
-    if int(ok.sum()) == 0:
-        return np.nan
-    return float(np.average(values[ok].to_numpy(), weights=weights[ok].to_numpy()))
+# ============================================================================
+# Unit VaR: compute per bank, standardize within bank, value-weighted aggregate
+# ============================================================================
 
+def compute_unit_var_aggregate() -> pd.DataFrame:
+    """
+    Compute the sector-level (value-weighted) standardized Unit VaR series.
 
-def compute_unit_var_agg() -> pd.DataFrame:
+    Value weights:
+    - lagged assets (assets_{t-1}), so weights are predetermined relative to period t
+    """
     df = load_df_from_project_outputs()
-    d = df.copy()
-    d["quarter"] = pd.to_datetime(d["quarter"], errors="coerce")
-    d = d.dropna(subset=["bank_id", "quarter", "assets", "var99"]).sort_values(["bank_id", "quarter"]).reset_index(drop=True)
 
-    d = d[(d["quarter"] >= SAMPLE_START) & (d["quarter"] <= SAMPLE_END)].copy()
-    if d.empty:
-        raise ValueError("Unit VaR input is empty after filtering to sample period.")
+    # Ensure quarter is a clean datetime quarter-end (no time component)
+    df["quarter"] = pd.to_datetime(df["quarter"], errors="coerce").dt.normalize()
 
-    d["unit_var"] = d["var99"] / d["assets"]
-    d["assets_lag"] = d.groupby("bank_id", sort=False)["assets"].shift(1)
+    # Restrict to the analysis sample
+    df = df[(df["quarter"] >= SAMPLE_START) & (df["quarter"] <= SAMPLE_END)].copy()
 
-    pre_mask = (d["quarter"] >= PRE_START) & (d["quarter"] <= PRE_END)
-    if int(pre_mask.sum()) == 0:
-        raise ValueError("Pre-period is empty on bank-level data (before aggregation).")
+    # Unit VaR at the bank level
+    df["unit_var"] = df["var99"] / df["assets"]
 
-    def _zscore_bank(grp: pd.DataFrame) -> pd.DataFrame:
-        out = grp.copy()
-        pre = out.loc[pre_mask.loc[out.index], "unit_var"]
-        if pre.empty:
-            out["unit_var"] = np.nan
-            return out
-        mu = float(pre.mean())
-        sd = float(pre.std())
-        if (not np.isfinite(mu)) or (not np.isfinite(sd)) or sd == 0.0:
-            out["unit_var"] = np.nan
-        else:
-            out["unit_var"] = (out["unit_var"] - mu) / sd
-        return out
+    # Lagged assets for value-weighting
+    df = df.sort_values(["bank_id", "quarter"])
+    df["assets_lag"] = df.groupby("bank_id")["assets"].shift(1)
 
-    d = d.groupby("bank_id", group_keys=False).apply(_zscore_bank)
+    def standardize_bank(g: pd.DataFrame) -> pd.DataFrame:
+        """Standardize unit_var within one bank using that bank's PRE-period moments."""
+        pre_mask = (g["quarter"] >= PRE_START) & (g["quarter"] <= PRE_END)
+        pre_values = g.loc[pre_mask, "unit_var"]
 
-    g = (
-        d.groupby("quarter", as_index=False)
-        .apply(lambda grp: pd.Series({"unit_var": _weighted_mean(grp["unit_var"], grp["assets_lag"])}), include_groups=False)
-        .sort_values("quarter")
-        .dropna(subset=["unit_var"])
-        .reset_index(drop=True)
-    )
-    if g.empty:
-        raise ValueError("No valid observations after aggregating standardized Unit VaR.")
-    return g
+        mean_pre = pre_values.mean()
+        std_pre = pre_values.std()
 
+        if pd.isna(std_pre) or std_pre == 0:
+            g["unit_var"] = np.nan
+            return g
 
-@dataclass(frozen=True)
-class PlotData:
-    quarter: pd.Series
-    implied_vol: pd.Series
-    unit_var: pd.Series
+        g["unit_var"] = (g["unit_var"] - mean_pre) / std_pre
+        return g
+
+    df = df.groupby("bank_id", group_keys=False).apply(standardize_bank, include_groups=False)
+
+    def weighted_mean(grp: pd.DataFrame) -> float:
+        """Value-weighted mean within a quarter, using lagged assets as weights."""
+        valid = grp["unit_var"].notna() & grp["assets_lag"].notna() & (grp["assets_lag"] > 0)
+        if valid.sum() == 0:
+            return np.nan
+        return float(np.average(grp.loc[valid, "unit_var"], weights=grp.loc[valid, "assets_lag"]))
+
+    agg = df.groupby("quarter").apply(weighted_mean, include_groups=False).reset_index()
+    agg.columns = ["quarter", "unit_var"]
+    agg = agg.dropna().sort_values("quarter").reset_index(drop=True)
+    return agg
 
 
-def build_plot_data(vix_file: Path) -> PlotData:
-    vix = load_vix_csv(vix_file)
-    vix_q = vix_to_quarterly(vix)
+# ============================================================================
+# Create plot: merge VIX + Unit VaR and plot both standardized series
+# ============================================================================
+
+def create_plot(vix_filepath: Path, output_filepath: Path):
+    # --- VIX pipeline ---
+    vix_daily = load_vix_data(vix_filepath)
+    vix_q = convert_vix_to_quarterly_mean(vix_daily)
+
+    # Restrict to sample period and standardize to PRE
     vix_q = vix_q[(vix_q["quarter"] >= SAMPLE_START) & (vix_q["quarter"] <= SAMPLE_END)].copy()
     vix_q = standardize_to_pre_period(vix_q, "vix").rename(columns={"vix": "implied_vol"})
 
-    unit = compute_unit_var_agg()
+    # --- Unit VaR pipeline ---
+    unit_var = compute_unit_var_aggregate()
 
-    merged = unit.merge(vix_q[["quarter", "implied_vol"]], on="quarter", how="inner").sort_values("quarter").reset_index(drop=True)
+    # --- Merge on quarter-end dates ---
+    merged = unit_var.merge(vix_q, on="quarter", how="inner").sort_values("quarter").reset_index(drop=True)
+
+    # Hard guards: fail loudly if the merge is empty or if a series became entirely NaN
     if merged.empty:
-        raise ValueError("No overlapping quarters between Unit VaR and VIX series after filtering.")
+        raise ValueError("Merge produced 0 rows. Check that both series use identical quarter-end datetimes.")
+    if merged["implied_vol"].isna().all() or merged["unit_var"].isna().all():
+        raise ValueError("A plotted series is entirely NaN. Check PRE-period standardization and data coverage.")
 
-    return PlotData(
-        quarter=merged["quarter"],
-        implied_vol=merged["implied_vol"],
-        unit_var=merged["unit_var"],
-    )
-
-
-def plot_implied_vol_vs_unit_var(plot_data: PlotData):
-    _ensure_matplotlib_cache_dir()
-    import matplotlib.dates as mdates
-    import matplotlib.pyplot as plt
-
+    # --- Plot ---
     fig, ax = plt.subplots(figsize=(10.5, 5.6))
-    ax.axhspan(-2, 2, color="0.85", zorder=0)
+
+    ax.axhspan(-2, 2, color="0.85", zorder=0, label="±2 std")
     ax.axhline(0, color="black", linewidth=1.0, zorder=1)
 
-    ax.plot(plot_data.quarter, plot_data.implied_vol, color="tab:green", linewidth=2.5, label="Implied Vol (VIX)", zorder=3)
-    ax.plot(plot_data.quarter, plot_data.unit_var, color="tab:blue", linestyle="--", linewidth=2.5, label="Unit VaR (99%)", zorder=2)
+    ax.plot(merged["quarter"], merged["implied_vol"],
+            linewidth=2.5, label="Implied Vol (VIX)", zorder=3)
+    ax.plot(merged["quarter"], merged["unit_var"],
+            linestyle="--", linewidth=2.5, label="Unit VaR (99%)", zorder=2)
 
     ax.set_title("Risk measures: implied volatility vs unit VaR")
-    ax.set_ylabel("Pre-Period Standard Deviations")
+    ax.set_ylabel("Pre-period standard deviations")
     ax.legend(loc="upper left", frameon=False)
 
     ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[6, 12]))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
     plt.setp(ax.get_xticklabels(), rotation=90, ha="center")
 
+    # Cosmetic twin axis (optional)
     ax2 = ax.twinx()
     ax2.set_ylim(ax.get_ylim())
     ax2.set_yticks(ax.get_yticks())
     ax2.set_ylabel("")
 
     fig.tight_layout()
+
+    output_filepath.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_filepath, dpi=300, bbox_inches="tight")
     return fig
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--vix", type=Path, default=DEFAULT_VIX_FILE, help="Path to VIX CSV (FRED download).")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT_FILE, help="Output PNG path.")
-    parser.add_argument("--show", action="store_true", help="Show interactive window.")
-    args = parser.parse_args()
-
-    plot_data = build_plot_data(args.vix)
-    fig = plot_implied_vol_vs_unit_var(plot_data)
-
-    try:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(args.out, dpi=300, bbox_inches="tight")
-        print(f"Saved: {args.out.resolve()}")
-    finally:
-        if args.show:
-            import matplotlib.pyplot as plt
-
-            plt.show()
-
-
 if __name__ == "__main__":
-    main()
+    VIX_FILE = Path("data/raw/VIXCLS (1).csv")
+    OUTPUT_FILE = Path("output/figures/implied_vol_vs_unit_var.png")
+    create_plot(VIX_FILE, OUTPUT_FILE)
+    # plt.show()  # For interactive inspection
