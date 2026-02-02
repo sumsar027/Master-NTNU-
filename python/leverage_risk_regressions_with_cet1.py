@@ -43,7 +43,7 @@ _CET1_COLUMN_CANDIDATES = [
 def load_data():
     """Load and merge balance sheet + VaR data"""
 
-    base = pd.read_csv("output/data/merged_quarterly_balanced.csv")
+    base = pd.read_csv("data/processed/merged_quarterly_balanced.csv")
     var = pd.read_csv("output/data/merged_with_var_99_dual_methods.csv")
 
     print(f"Balance sheet: {len(base)} rows")

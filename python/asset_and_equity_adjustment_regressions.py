@@ -6,11 +6,13 @@ Model: Asset Growth = β₀ + β₁·Leverage Growth + ε
 
 We run three versions:
 1. Pooled OLS (simple regression)
-2. Time FE (controls for quarter-specific shocks like financial crisis)
-3. Bank + Time FE (controls for both bank differences and time shocks)
+2. Bank FE (controls for bank-specific differences)
+3. Time FE (controls for quarter-specific shocks like financial crisis)
+4. Bank + Time FE (controls for both bank differences and time shocks)
 
 Positive β₁ = when leverage increases, assets also increase (procyclical)
 """
+
 
 import numpy as np
 import pandas as pd
@@ -23,7 +25,7 @@ from pathlib import Path
 # ============================================================================
 
 # Input file (merged quarterly balance sheet data)
-INPUT_FILE = Path("output/data/merged_quarterly_balanced.csv")
+INPUT_FILE = Path("data/processed/merged_quarterly_balanced.csv")
 
 # Output files
 OUTPUT_DATASET = Path("output/data/analysis_dataset.csv")
@@ -45,7 +47,7 @@ def calculate_growth(df, entity_col, value_col, output_col):
     """
     Calculate quarterly growth rate as log difference (in percent)
     
-    Growth = 100 × (log(X_t) - log(X_t-1))
+    Growth = 100 * (log(X_t) - log(X_t-1))
     
     This is approximately equal to percentage change.
     Only calculated when both current and previous values are positive.
@@ -239,13 +241,17 @@ def run_all_regressions(df, entity_col, time_col):
     print("\nRunning Model 1: Pooled OLS...")
     results[1] = run_pooled_ols(df, entity_col)
     
-    # Model 2: Time FE (controls for quarter shocks)
-    print("Running Model 2: Time FE...")
-    results[2] = run_panel_fe(df, entity_col, time_col, bank_fe=False, time_fe=True)
+     # Model 2: Bank FE (controls for quarter shocks)
+    print("\nRunning Model 2: Bank FE...")
+    results[2] = run_panel_fe(df, entity_col, time_col, bank_fe=True, time_fe=False)
     
-    # Model 3: Bank + Time FE (controls for both)
-    print("Running Model 3: Bank + Time FE...")
-    results[3] = run_panel_fe(df, entity_col, time_col, bank_fe=True, time_fe=True)
+    # Model 3: Time FE (controls for quarter shocks)
+    print("Running Model 3: Time FE...")
+    results[3] = run_panel_fe(df, entity_col, time_col, bank_fe=False, time_fe=True)
+    
+    # Model 4: Bank + Time FE (controls for both)
+    print("Running Model 4: Bank + Time FE...")
+    results[4] = run_panel_fe(df, entity_col, time_col, bank_fe=True, time_fe=True)
     
     return results
 
@@ -260,8 +266,9 @@ def save_results(results):
     rows = []
     spec_names = {
         1: "Pooled OLS",
-        2: "Time FE",
-        3: "Bank + Time FE"
+        2: "Bank FE",
+        3: "Time FE",
+        4: "Bank + Time FE"
     }
     
     for model_num, res in results.items():
@@ -299,7 +306,7 @@ def main():
     Main analysis pipeline:
     1. Load balance sheet data
     2. Calculate leverage and growth rates
-    3. Run three regression specifications
+    3. Run four regression specifications
     4. Display and save results
     """
     
@@ -327,12 +334,13 @@ def main():
     print("Independent variable: Leverage Growth (quarterly % change)")
     print("\nModels:")
     print("  (1) Pooled OLS - simple regression")
-    print("  (2) Time FE - controls for quarter-specific shocks")
-    print("  (3) Bank + Time FE - controls for bank differences and quarter shocks")
+    print("  (2) Bank FE - controls for bank-specific differences")
+    print("  (3) Time FE - controls for quarter-specific shocks")
+    print("  (4) Bank + Time FE - controls for bank differences and quarter shocks")
     print("\n" + "-"*80)
     
     # Print results table
-    for model_num in [1, 2, 3]:
+    for model_num in [1, 2, 3, 4]:
         res = results[model_num]
         coef = res['coef']
         se = res['se']
@@ -341,24 +349,9 @@ def main():
         
         print(f"({model_num}) Coefficient: {coef:7.3f}{stars:3s}  SE: {se:6.3f}  t-stat: {t_stat:6.2f}  R²: {res['r2']:.3f}")
     
-    print("-"*80)
-    print(f"N = {results[1]['nobs']} observations")
-    print("Significance: *** p<0.01, ** p<0.05, * p<0.10")
-    
-    # Interpret the main result
-    coef_fe = results[3]['coef']  # Bank + Time FE (most robust)
-    if coef_fe > 0:
-        print(f"\nInterpretation: β = {coef_fe:.3f} > 0 suggests PROCYCLICAL behavior")
-        print("  → When banks increase leverage, they also grow assets")
-    else:
-        print(f"\nInterpretation: β = {coef_fe:.3f} < 0 suggests COUNTERCYCLICAL behavior")
-        print("  → When banks increase leverage, they reduce assets")
-    
-    # Save results
-    results_df = save_results(results)
-    print(f"\nResults saved to {OUTPUT_RESULTS.name}")
-    print("\n" + "="*80)
-
-
+    #save results to CSV 
+    save_results(results)
+    print(f"\nSaved regression results to {OUTPUT_RESULTS.name}")   
+ 
 if __name__ == "__main__":
     main()

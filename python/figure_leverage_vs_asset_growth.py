@@ -33,7 +33,7 @@ from pathlib import Path
 
 # Set up file paths
 ROOT = Path(__file__).resolve().parents[2]  # Go up 2 folders from this script
-INPUT_FILE = ROOT / "output" / "data" / "merged_quarterly_balanced.csv"
+INPUT_FILE = ROOT / "data" / "processed" / "merged_quarterly_balanced.csv"
 OUTPUT_FILE = ROOT / "output" / "figures" / "figure_2_4_replica.png"
 
 # Make sure output folder exists

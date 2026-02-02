@@ -14,6 +14,8 @@ import pandas as pd
 from linearmodels.panel import PanelOLS
 from pathlib import Path
 
+from sklearn import base
+
 # ============================================================================
 # CONFIG
 # ============================================================================
@@ -31,8 +33,13 @@ BANK_MAP = {
 def load_data():
     """Load and merge balance sheet + VaR data"""
     
-    base = pd.read_csv("output/data/merged_quarterly_balanced.csv")
+    base = pd.read_csv("data/processed/merged_quarterly_balanced.csv")
     var  = pd.read_csv("output/data/merged_with_var_99_dual_methods.csv")
+    
+    base["bank_id"] = base["bank"].str.strip().str.lower().str.replace(" ", "_")
+    base["period_end_date"] = pd.PeriodIndex(base["quarter"], freq="Q").to_timestamp(how="end").normalize()
+
+    var["period_end_date"] = pd.to_datetime(var["period_end_date"])
     
     print(f"Balance sheet: {len(base)} rows")
     print(f"VaR data: {len(var)} rows")

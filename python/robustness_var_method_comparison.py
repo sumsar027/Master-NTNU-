@@ -1,7 +1,7 @@
 """
 Robustness Test: Compare Gaussian vs Simple Scaling for VaR 99%
 
-Tests whether using Gaussian scaling (×1.414) vs simple scaling (×2.0) 
+Tests whether using Gaussian scaling (*1.414) vs simple scaling (*2.0) 
 affects regression results. If results are similar, this validates the 
 choice of Gaussian scaling in the main analysis.
 
@@ -24,7 +24,7 @@ from pathlib import Path
 # CONFIG
 # ============================================================================
 
-BALANCE_FILE = Path("output/data/merged_quarterly_balanced.csv")
+BALANCE_FILE = Path("data/processed/merged_quarterly_balanced.csv")
 VAR_FILE = Path("output/data/merged_with_var_99_dual_methods.csv")
 OUTPUT_FILE = Path("output/tables/panel_results_var99_gauss_vs_x2.csv")
 
@@ -47,14 +47,25 @@ balance = pd.read_csv(BALANCE_FILE)
 var_data = pd.read_csv(VAR_FILE)
 
 # Standardize column names
-if "bank" in balance.columns:
+if "bank" in balance.columns and "bank_id" not in balance.columns:
     balance = balance.rename(columns={"bank": "bank_id"})
-if "bank" in var_data.columns:
+elif "bank" in balance.columns and "bank_id" in balance.columns:
+    balance = balance.drop(columns=["bank"])
+
+if "bank" in var_data.columns and "bank_id" not in var_data.columns:
     var_data = var_data.rename(columns={"bank": "bank_id"})
+elif "bank" in var_data.columns and "bank_id" in var_data.columns:
+    var_data = var_data.drop(columns=["bank"])
+
+# If duplicate column names exist (e.g., bank_id twice), keep the first occurrence
+if balance.columns.duplicated().any():
+    balance = balance.loc[:, ~balance.columns.duplicated()]
+if var_data.columns.duplicated().any():
+    var_data = var_data.loc[:, ~var_data.columns.duplicated()]
 
 # Harmonize bank names
-balance["bank_id"] = balance["bank_id"].str.lower().replace(BANK_MAP)
-var_data["bank_id"] = var_data["bank_id"].str.lower().replace(BANK_MAP)
+balance["bank_id"] = balance["bank_id"].astype(str).str.lower().replace(BANK_MAP)
+var_data["bank_id"] = var_data["bank_id"].astype(str).str.lower().replace(BANK_MAP)
 
 # Convert dates
 balance["period_end_date"] = pd.to_datetime(balance["period_end_date"])

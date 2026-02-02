@@ -84,13 +84,13 @@ def normalize_bank_id(bank_id: str) -> str:
 
     return bank_id.replace(" ", "_").replace("-", "_").replace(".", "")
 
-
+# make sure required columns exist
 def _require_columns(df: pd.DataFrame, cols: list[str], *, where: str) -> None:
     missing = [c for c in cols if c not in df.columns]
     if missing:
         raise KeyError(f"Missing column(s) in {where}: " + ", ".join(missing))
 
-
+# find first matching column from candidates
 def _find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
     for c in candidates:
         if c in df.columns:
@@ -127,7 +127,7 @@ def _to_datetime(series: pd.Series) -> pd.Series:
 
     return pd.to_datetime(s, errors="coerce")
 
-
+# make numeric, handling common formats (commas, parentheses for negatives, NAs)
 def _to_numeric(series: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series):
         return series.astype(float)
@@ -146,6 +146,7 @@ def load_df_from_project_outputs(
 ) -> pd.DataFrame:
     """Load and merge balance sheet data with 99% VaR data (fixed column definitions)."""
 
+    # Load files and check existence
     if not base_file.exists():
         raise FileNotFoundError(f"Missing file: {base_file}")
     if not var_file.exists():
@@ -208,19 +209,36 @@ def load_df_from_project_outputs(
     if merged.empty:
         raise ValueError("No observations after merging + filtering to 2014Q1–2025Q3.")
 
-    # Require fixed balance sheet columns
-    if ASSETS_COL not in merged.columns:
+    # Select balance sheet columns (prefer thesis names, fall back to snake_case outputs)
+    assets_col = _find_column(merged, [ASSETS_COL, "total_assets_2", "total_assets", "assets"])
+    if assets_col is None:
         raise KeyError(f"Required assets column not found: {ASSETS_COL}")
-    if EQUITY_COL not in merged.columns:
+
+    equity_col = _find_column(
+        merged,
+        [
+            EQUITY_COL,
+            "common_equity_total",
+            "common_equity_attributable_to_parent_shareholders",
+            "total_shareholders_equity",
+            "total_equity",
+        ],
+    )
+    if equity_col is None:
         raise KeyError(f"Required equity column not found: {EQUITY_COL}")
 
-    print("\n=== COLUMN SELECTION (FIXED) ===")
-    print("Assets column used:", ASSETS_COL)
-    print("Equity column used:", EQUITY_COL)
-    print("===============================\n")
+    print("\n=== COLUMN SELECTION ===")
+    print("Assets column used:", assets_col)
+    print("Equity column used:", equity_col)
+    print("=======================\n")
 
-    assets = _to_numeric(merged[ASSETS_COL])
-    equity = _to_numeric(merged[EQUITY_COL])
+    # Small robustness: if both total_assets and total_assets_2 exist, treat total_assets_2 as fallback
+    if assets_col == "total_assets" and "total_assets_2" in merged.columns:
+        assets = _to_numeric(merged["total_assets"]).fillna(_to_numeric(merged["total_assets_2"]))
+    else:
+        assets = _to_numeric(merged[assets_col])
+
+    equity = _to_numeric(merged[equity_col])
     var99 = _to_numeric(merged["var_99_level"])
 
     df = pd.DataFrame(
