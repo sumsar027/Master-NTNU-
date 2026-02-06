@@ -59,7 +59,7 @@ df["leverage_growth"] = (
     100 * np.log(df["leverage"]).groupby(df["bank"]).diff()
 )
 
-df = df.dropna()
+df = df.dropna(subset=[X_COL, Y_COL])
 
 # -------------------------------------------------------------------
 # Restrict sample window (inclusive)
@@ -164,11 +164,11 @@ ax.grid(True, linestyle="--", alpha=0.6)
 # -------------------------------------------------------------------
 xmin, xmax = ax.get_xlim()
 ymin, ymax = ax.get_ylim()
-#low = min(xmin, ymin)
-#high = max(xmax, ymax)
+low = min(xmin, ymin) # can change to a fixed value or dynamic limits based on data
+high = max(xmax, ymax)
 
-ax.set_xlim(-40, 40)
-ax.set_ylim(-40, 40)
+ax.set_xlim(low, high) # can change to (low, high) for dynamic limits
+ax.set_ylim(low, high) # can change to (low, high) for dynamic limits
 ax.set_aspect("equal", adjustable="box")
 
 # 45° line: y = x

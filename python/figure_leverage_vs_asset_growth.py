@@ -10,8 +10,8 @@ Default input (this repo):
 Assumed columns (override via flags if needed):
   bank = bank
   date = period_end_date
-  assets = total_assets_2 (fallback: total_assets, assets)
-  equity = common_equity_total
+  assets = total_assets (fallback: total_assets_2, assets)
+  equity = common_equity_total (fallback: tangible_total_equity)
 
 Run:
   /opt/anaconda3/bin/python src/pipeline/lev_growth_asset_growth_figure_simple.py
@@ -31,6 +31,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
 # Set up file paths
 ROOT = Path(__file__).resolve().parents[2]  # Go up 2 folders from this script
 INPUT_FILE = ROOT / "data" / "processed" / "merged_quarterly_balanced.csv"
@@ -42,16 +53,41 @@ OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 # Read the data
 df = pd.read_csv(INPUT_FILE)
 
-# Select and clean the columns we need
-df = df[["bank", "period_end_date", "total_assets_2", "common_equity_total"]].copy()
+assets_primary = _find_column(df, ["total_assets", "assets"])
+assets_fallback = _find_column(df, ["total_assets_2"])
+equity_col = _find_column(df, ["common_equity_total", "tangible_total_equity"])
+
+if assets_primary is None and assets_fallback is None:
+    raise ValueError(
+        "Could not find an assets column. Tried: total_assets, assets, total_assets_2"
+    )
+if equity_col is None:
+    raise ValueError(
+        "Could not find an equity column. Tried: common_equity_total, tangible_total_equity"
+    )
+
+cols = ["bank", "period_end_date", equity_col]
+if assets_primary is not None:
+    cols.append(assets_primary)
+if assets_fallback is not None and assets_fallback not in cols:
+    cols.append(assets_fallback)
+df = df[cols].copy()
 
 # Convert to numeric (handles any text/errors in data)
-df["total_assets_2"] = pd.to_numeric(df["total_assets_2"], errors="coerce")
-df["common_equity_total"] = pd.to_numeric(df["common_equity_total"], errors="coerce")
+equity = pd.to_numeric(df[equity_col], errors="coerce")
+assets = None
+if assets_primary is not None:
+    assets = pd.to_numeric(df[assets_primary], errors="coerce")
+if assets_fallback is not None:
+    assets_fb = pd.to_numeric(df[assets_fallback], errors="coerce")
+    assets = assets_fb if assets is None else assets.fillna(assets_fb)
+
+df["assets"] = assets
+df["equity"] = equity
 
 # Remove rows with missing data or negative values
 df = df.dropna()
-df = df[(df["total_assets_2"] > 0) & (df["common_equity_total"] > 0)]
+df = df[(df["assets"] > 0) & (df["equity"] > 0)]
 
 # Convert dates to quarterly periods
 df["quarter"] = pd.to_datetime(df["period_end_date"]).dt.to_period("Q")
@@ -60,11 +96,11 @@ df["quarter"] = pd.to_datetime(df["period_end_date"]).dt.to_period("Q")
 df = df.sort_values(["bank", "quarter"])
 
 # Calculate leverage (assets / equity)
-df["leverage"] = df["total_assets_2"] / df["common_equity_total"]
+df["leverage"] = df["assets"] / df["equity"]
 
 # Calculate quarterly growth rates using log differences
 # Formula: growth = 100 * ln(value_t / value_t-1) = 100 * [ln(value_t) - ln(value_t-1)]
-df["asset_growth"] = 100 * np.log(df["total_assets_2"]).groupby(df["bank"]).diff()
+df["asset_growth"] = 100 * np.log(df["assets"]).groupby(df["bank"]).diff()
 df["leverage_growth"] = 100 * np.log(df["leverage"]).groupby(df["bank"]).diff()
 
 # Remove the first observation for each bank (no growth rate available)

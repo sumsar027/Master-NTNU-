@@ -7,10 +7,7 @@ Construct a diagnostic figure (Figure-5-style, following Adrian & Shin,
 but using LEVELS rather than standardized values) for 2014Q1–2025Q3.
 
 The figure displays:
-- Total Assets (level)
-- Book Common Equity (level)
-- Liabilities (level) = Assets - Equity (accounting identity)
-- Value-at-Risk (99%) level, harmonized using the Bank of America scaling factor
+- VaR/E (99%) = VaR / Book common equity
 
 Important: NO standardization
 ------------------------------
@@ -18,9 +15,7 @@ All series are shown in levels.
 We do not normalize by initial values, means, GDP, or balance sheet size.
 As a result:
 - The figure reflects long-run growth and scale effects.
-- Variables are plotted on two y-axes:
-    • Left axis: balance sheet quantities
-    • Right axis: VaR levels
+- Single axis: VaR/E levels
 
 Aggregation (bank → sector)
 ---------------------------
@@ -40,15 +35,16 @@ Input files
 
 Output
 ------
-output/figures/figure_levels_var_and_liabilities.png
+output/figures/figure_var_to_equity_levels.png
 """
 
 from __future__ import annotations
 from pathlib import Path
 
-import os
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 
 # -----------------------------
@@ -56,6 +52,7 @@ import pandas as pd
 # -----------------------------
 BASE_FILE = Path("data/processed/merged_quarterly_balanced.csv")
 VAR_FILE = Path("output/data/merged_with_var_99_dual_methods.csv")
+OUTPUT_FILE = Path("output/figures/figure_var_to_equity_levels.png")
 
 
 # -----------------------------
@@ -247,11 +244,30 @@ def load_df_from_project_outputs(
     merged = merged[(merged["period_end_date"] >= SAMPLE_START) &
                     (merged["period_end_date"] <= SAMPLE_END)]
 
+    assets_col = _find_column(merged, [ASSETS_COL, "total_assets_2", "total_assets", "assets"])
+    if assets_col is None:
+        raise KeyError(f"Required assets column not found: {ASSETS_COL}")
+
+    equity_col = _find_column(
+        merged,
+        [
+            EQUITY_COL,
+            "common_equity_total",
+            "shareholders_equity",
+            "total_shareholders_equity",
+            "total_equity",
+            "tangible_total_equity",
+            "equity",
+        ],
+    )
+    if equity_col is None:
+        raise KeyError(f"Required equity column not found: {EQUITY_COL}")
+
     df = pd.DataFrame({
         "bank_id": merged["bank_id"],
         "quarter": merged["period_end_date"],
-        "assets": _to_numeric(merged[ASSETS_COL]),
-        "equity": _to_numeric(merged[EQUITY_COL]),
+        "assets": _to_numeric(merged[assets_col]),
+        "equity": _to_numeric(merged[equity_col]),
         "var99": _to_numeric(merged["var_99_level"]),
     })
 
@@ -260,3 +276,82 @@ def load_df_from_project_outputs(
     df = df.sort_values(["bank_id", "quarter"]).reset_index(drop=True)
 
     return df
+
+
+def _weighted_mean(values: pd.Series, weights: pd.Series) -> float:
+    ok = values.notna() & weights.notna() & np.isfinite(weights) & (weights > 0)
+    if int(ok.sum()) == 0:
+        return np.nan
+    return float(np.average(values[ok].to_numpy(), weights=weights[ok].to_numpy()))
+
+
+def aggregate_sector_levels(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.sort_values(["bank_id", "quarter"]).copy()
+    df["assets_lag"] = df.groupby("bank_id")["assets"].shift(1)
+    df["liabilities"] = df["assets"] - df["equity"]
+    df["var_to_equity"] = df["var99"] / df["equity"]
+
+    df = df.dropna(subset=["assets_lag", "liabilities", "var_to_equity"])
+    df = df[np.isfinite(df["var_to_equity"]) & (df["var_to_equity"] > 0)]
+
+    def _agg(grp: pd.DataFrame) -> pd.Series:
+        w = grp["assets_lag"]
+        return pd.Series(
+            {
+                "assets": _weighted_mean(grp["assets"], w),
+                "equity": _weighted_mean(grp["equity"], w),
+                "liabilities": _weighted_mean(grp["liabilities"], w),
+                "var99": _weighted_mean(grp["var99"], w),
+                "var_to_equity": _weighted_mean(grp["var_to_equity"], w),
+            }
+        )
+
+    g = (
+        df.groupby("quarter", as_index=False)
+        .apply(_agg, include_groups=False)
+        .sort_values("quarter")
+        .reset_index(drop=True)
+    )
+    return g
+
+
+def plot_levels_with_var(df: pd.DataFrame) -> plt.Figure:
+    g = aggregate_sector_levels(df)
+    if g.empty:
+        raise ValueError("No valid observations after aggregation.")
+
+    fig, ax = plt.subplots(figsize=(10.5, 5.6))
+    ax.plot(
+        g["quarter"],
+        g["var_to_equity"],
+        color="tab:purple",
+        linewidth=2.4,
+        label="VaR/E (99%)",
+    )
+    ax.set_ylabel("VaR/E (levels)")
+    ax.set_title("VaR/E (99%) — Levels (No Standardization)")
+    ax.grid(True, linestyle="--", alpha=0.6)
+
+    ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[6, 12]))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b-%y"))
+    plt.setp(ax.get_xticklabels(), rotation=90, ha="center")
+
+    ax.legend(loc="upper left", frameon=False)
+
+    fig.tight_layout()
+    return fig
+
+
+def main() -> None:
+    df = load_df_from_project_outputs()
+    fig = plot_levels_with_var(df)
+
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(OUTPUT_FILE, dpi=300, bbox_inches="tight")
+    print(f"Saved: {OUTPUT_FILE.resolve()}")
+
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()

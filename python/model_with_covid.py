@@ -3,19 +3,15 @@ Panel regressions: Leverage, Assets, Equity on VaR measures
 Replicates Adrian & Shin (2014) style analysis
 
 Models:
-  1. log(Leverage) ~ log(UnitVaR) + bank FE
-  2. log(Assets) ~ log(VaR) + bank FE
-  3. log(Equity) ~ log(VaR) + bank FE
-  4A. log(Leverage) ~ log(UnitVaR) + LCR_{t-1} + log(UnitVaR)*LCR_{t-1} + bank FE
-  5. log(Leverage) ~ LCR_{t-1} + bank FE
+  1. log(Leverage) ~ log(UnitVaR) + COVID + log(UnitVaR)*COVID + bank FE
 """
 
 import numpy as np
 import pandas as pd
 from linearmodels.panel import PanelOLS
 from pathlib import Path
-
 from sklearn import base
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 # ============================================================================
 # CONFIG
@@ -24,8 +20,15 @@ from sklearn import base
 BANK_MAP = {
     "bankofamerica": "bank_of_america",
     "citigroup": "citibank",
-    "wellsfargo": "wells_fargo"
+    "wellsfargo": "wells_fargo",
+    "goldmansachs": "goldman_sachs",
+    "jpmorgan": "jpmorgan_chase",
+    "morganstanley": "morgan_stanley"
 }
+
+# COVID dummy window (inclusive). Adjust if needed.
+COVID_START = "2019-03-31"
+COVID_END = "2021-12-31"
 
 # ============================================================================
 # LOAD & CLEAN DATA
@@ -99,17 +102,16 @@ def prepare_variables(df):
     for var in ['leverage', 'total_assets', 'common_equity_total', 
                 'var_99_level', 'unit_var']:
         df[f'log_{var}'] = np.log(df[var].where(df[var] > 0))
+
+    # COVID dummy + interaction
+    covid_start = pd.to_datetime(COVID_START)
+    covid_end = pd.to_datetime(COVID_END)
+    df['covid_dummy'] = (
+        (df['period_end_date'] >= covid_start) &
+        (df['period_end_date'] <= covid_end)
+    ).astype(int)
+    df['int_covid_unitvar'] = df['covid_dummy'] * df['log_unit_var']
     
-    # LCR variables (for Model 4A only)
-    if 'liquidity_coverage_ratio_basel_3' in df.columns:
-        df['lcr_ratio'] = pd.to_numeric(
-            df['liquidity_coverage_ratio_basel_3'], errors='coerce'
-        ) / 100.0
-        df = df.sort_values(['bank_id', 'period_end_date'])
-        df['lcr_lag1'] = df.groupby('bank_id')['lcr_ratio'].shift(1)
-        df['int_unitvar_lcr'] = df['log_unit_var'] * df['lcr_lag1']
-    
-    print(f"\nEstimation sample prepared: {len(df)} observations")
     
     return df
 
@@ -133,6 +135,19 @@ def estimate_model(df, dep_var, indep_vars, model_name):
     print(f"Sample: {len(df_clean)} observations, "
           f"{df_clean['bank_id'].nunique()} banks, "
           f"{df_clean['period_end_date'].nunique()} periods")
+
+    # VIF test (multicollinearity diagnostics)
+    if len(indep_vars) >= 2:
+        X_vif = df_clean[indep_vars].copy()
+        vif_rows = []
+        for i, col in enumerate(X_vif.columns):
+            vif_rows.append({
+                "variable": col,
+                "vif": float(variance_inflation_factor(X_vif.values, i))
+            })
+        df_vif = pd.DataFrame(vif_rows).sort_values("vif", ascending=False)
+        print("\nVIF:")
+        print(df_vif.to_string(index=False))
     
     # Set up panel structure
     panel = df_clean.set_index(['bank_id', 'period_end_date'])
@@ -212,47 +227,11 @@ def main():
     res1 = estimate_model(
         df, 
         dep_var='log_leverage', 
-        indep_vars='log_unit_var',
+        indep_vars=['log_unit_var', 'covid_dummy', 'int_covid_unitvar'],
         model_name='Model_1_Leverage'
     )
     all_results.append(res1)
-    
-    # MODEL 2: Assets on VaR
-    res2 = estimate_model(
-        df,
-        dep_var='log_total_assets',
-        indep_vars='log_var_99_level',
-        model_name='Model_2_Assets'
-    )
-    all_results.append(res2)
-    
-    # MODEL 3: Equity on VaR
-    res3 = estimate_model(
-        df,
-        dep_var='log_common_equity_total',
-        indep_vars='log_var_99_level',
-        model_name='Model_3_Equity'
-    )
-    all_results.append(res3)
-    
-    # MODEL 4A: Leverage with LCR Interaction
-    res4 = estimate_model(
-        df,
-        dep_var='log_leverage',
-        indep_vars=['log_unit_var', 'lcr_lag1', 'int_unitvar_lcr'],
-        model_name='Model_4A_LCR'
-    )
-    all_results.append(res4)
-
-    # MODEL 5: Leverage on LCR only (no VaR)
-    res5 = estimate_model(
-        df,
-        dep_var='log_leverage',
-        indep_vars='lcr_lag1',
-        model_name='Model_5_LCR_only'
-    )
-    all_results.append(res5)
-    
+        
     # SAVE RESULTS
     save_results(all_results)
     

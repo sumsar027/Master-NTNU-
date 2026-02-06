@@ -210,7 +210,7 @@ def load_df_from_project_outputs(
         raise ValueError("No observations after merging + filtering to 2014Q1–2025Q3.")
 
     # Select balance sheet columns (prefer thesis names, fall back to snake_case outputs)
-    assets_col = _find_column(merged, [ASSETS_COL, "total_assets_2", "total_assets", "assets"])
+    assets_col = _find_column(merged, [ASSETS_COL,  "total_assets", "total_assets_2","assets"])
     if assets_col is None:
         raise KeyError(f"Required assets column not found: {ASSETS_COL}")
 
