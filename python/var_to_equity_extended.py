@@ -244,7 +244,8 @@ def load_df_from_project_outputs(
     merged = merged[(merged["period_end_date"] >= SAMPLE_START) &
                     (merged["period_end_date"] <= SAMPLE_END)]
 
-    assets_col = _find_column(merged, [ASSETS_COL, "total_assets_2", "total_assets", "assets"])
+    # use total_assets if available, otherwise fallback to total_assets_2 (legacy column)
+    assets_col = _find_column(merged, [ASSETS_COL, "total_assets", "total_assets_2", "assets"])
     if assets_col is None:
         raise KeyError(f"Required assets column not found: {ASSETS_COL}")
 
@@ -253,12 +254,7 @@ def load_df_from_project_outputs(
         [
             EQUITY_COL,
             "common_equity_total",
-            "shareholders_equity",
-            "total_shareholders_equity",
-            "total_equity",
-            "tangible_total_equity",
-            "equity",
-        ],
+        ]
     )
     if equity_col is None:
         raise KeyError(f"Required equity column not found: {EQUITY_COL}")

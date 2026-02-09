@@ -21,6 +21,7 @@ from pathlib import Path
 # CONFIG
 # ============================================================================
 
+# Map various bank name formats to a consistent ID (lowercase, no spaces, underscores)
 BANK_MAP = {
     "bankofamerica": "bank_of_america",
     "citigroup": "citibank",
@@ -30,13 +31,8 @@ BANK_MAP = {
     "morgan_stanley": "morganstanley",
 }
 
-_CET1_COLUMN_CANDIDATES = [
-    "capital_adequacy_core_tier_1",
-    "capital_adequacy_core_tier_1_pct",
-    "capital_adequacy_core_tier_1_percent",
-    "capital_adequacy_core_tier_1_ratio",
-    "capital_adequacy_core_tier_1_value",
-]
+_CET1_COLUMN = [
+    "capital_adequacy_core_tier_1"]
 
 # ============================================================================
 # LOAD & CLEAN DATA
@@ -100,12 +96,12 @@ def _to_decimal_ratio(series: pd.Series) -> pd.Series:
 
 
 def _select_cet1_column(df: pd.DataFrame) -> str:
-    for col in _CET1_COLUMN_CANDIDATES:
+    for col in _CET1_COLUMN:
         if col in df.columns:
             return col
     raise SystemExit(
         "ERROR: CET1 column not found. Expected one of: "
-        + ", ".join(_CET1_COLUMN_CANDIDATES)
+        + ", ".join(_CET1_COLUMN)
     )
 
 
@@ -195,7 +191,7 @@ def estimate_model(df, dep_var, indep_vars, model_name):
 # ============================================================================
 
 
-def save_results(results_list, output_path="output/tables/model_results_model_one.csv"):
+def save_results(results_list, output_path="output/tables/model_results_model_one_cet1.csv"):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     model_rows = []

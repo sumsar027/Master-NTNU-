@@ -26,7 +26,8 @@ END_QUARTER = "2025Q3"
 ROOT = Path(__file__).resolve().parents[2]
 INPUT_FILE = ROOT / "data" / "processed" / "merged_quarterly_balanced.csv"
 OUTPUT_FILE = ROOT / "output" / "figures" / "figure_8_replica.png"
-OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True) # ensure output directory exists
+
 
 # -------------------------------------------------------------------
 # Load data
@@ -34,14 +35,16 @@ OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 df = pd.read_csv(INPUT_FILE)
 
 df = df[
-    ["bank", "period_end_date", "total_assets_2", "common_equity_total"]
+    ["bank", "period_end_date", "total_assets", "common_equity_total"]
 ].copy()
 
-df["total_assets_2"] = pd.to_numeric(df["total_assets_2"], errors="coerce")
+df["total_assets"] = pd.to_numeric(df["total_assets"], errors="coerce") 
+# Convert to numeric if not already, coercing errors to NaN for later filtering
+
 df["common_equity_total"] = pd.to_numeric(df["common_equity_total"], errors="coerce")
 
 df = df.dropna()
-df = df[(df["total_assets_2"] > 0) & (df["common_equity_total"] > 0)]
+df = df[(df["total_assets"] > 0) & (df["common_equity_total"] > 0)]
 
 df["quarter"] = pd.to_datetime(df["period_end_date"]).dt.to_period("Q")
 df = df.sort_values(["bank", "quarter"])
@@ -49,10 +52,10 @@ df = df.sort_values(["bank", "quarter"])
 # -------------------------------------------------------------------
 # Construct leverage and log growth rates
 # -------------------------------------------------------------------
-df["leverage"] = df["total_assets_2"] / df["common_equity_total"]
+df["leverage"] = df["total_assets"] / df["common_equity_total"]
 
 df["asset_growth"] = (
-    100 * np.log(df["total_assets_2"]).groupby(df["bank"]).diff()
+    100 * np.log(df["total_assets"]).groupby(df["bank"]).diff()
 )
 
 df["leverage_growth"] = (
@@ -80,11 +83,13 @@ if len(df) > 0:
 # -------------------------------------------------------------------
 # Outliers (label quarters)
 # -------------------------------------------------------------------
+# Using robust z-scores to identify outliers in the scatter plot
 def robust_z(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=float)
     med = np.nanmedian(values)
     mad = np.nanmedian(np.abs(values - med))
-    if not np.isfinite(mad) or mad == 0:
+    if not np.isfinite(mad) or mad == 0: 
+        # avoid division by zero; if MAD is zero, all values are the same, so no outliers
         return np.zeros_like(values)
     return 0.6745 * (values - med) / mad
 
@@ -153,8 +158,8 @@ if len(outliers) > 0:
             zorder=6,
         )
 
-ax.set_xlabel("Leverage Growth (log change × 100, quarterly)")
-ax.set_ylabel("Total Asset Growth (log change × 100, quarterly)")
+ax.set_xlabel("Leverage Growth (log change * 100, quarterly)")
+ax.set_ylabel("Total Asset Growth (log change * 100, quarterly)")
 ax.set_title("Leverage Growth vs Asset Growth (Balanced Panel)")
 
 ax.grid(True, linestyle="--", alpha=0.6)

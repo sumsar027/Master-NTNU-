@@ -128,9 +128,7 @@ def prepare_variables(df, entity_col):
     
     # Find the columns we need (handle different naming conventions)
     assets_col = find_column(df, [ 'total_assets', 'total_assets_2','assets'])
-    equity_col = find_column(df, ['common_equity_total', 
-                                   'common_equity_attributable_to_parent_shareholders',
-                                   'total_shareholders_equity', 'total_equity'])
+    equity_col = find_column(df, ['common_equity_total', 'total_shareholders_equity', 'total_equity'])
     
     if assets_col is None:
         print("ERROR: Could not find assets column")

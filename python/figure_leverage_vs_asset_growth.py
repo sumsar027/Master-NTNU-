@@ -1,5 +1,5 @@
 """
-Simple Adrian–Shin (2010) Figure 2.4–style scatter plot:
+Simple Adrian - Shin (2010) Figure 2.4 - style scatter plot:
 
 - x-axis: Total Asset Growth (quarterly, percent)
 - y-axis: Leverage Growth (quarterly, percent)

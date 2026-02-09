@@ -172,7 +172,7 @@ def estimate_model(df, dep_var, indep_vars, model_name):
 # ============================================================================
 # SAVE RESULTS - CLEANER FORMAT
 # ============================================================================
-def save_results(results_list, output_path='output/tables/model_results_model_one.csv'):
+def save_results(results_list, output_path='output/tables/model_results_model_one_covid.csv'):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     model_rows = []
