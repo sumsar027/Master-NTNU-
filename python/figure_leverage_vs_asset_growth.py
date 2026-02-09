@@ -53,17 +53,30 @@ OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 # Read the data
 df = pd.read_csv(INPUT_FILE)
 
-assets_primary = _find_column(df, ["total_assets", "assets"])
+# --- KEEP ONLY GROUP 1 BANKS ---
+GROUP_1 = [
+    "Bank of America",
+    "Citigroup",
+    "Goldman Sachs",
+    "JPMorgan Chase",
+    "Morgan Stanley",
+    "Wells Fargo",
+]
+
+df = df[df["bank"].isin(GROUP_1)].copy()
+#remove from GROUP_1 to here if you want all 11 banks
+
+assets_primary = _find_column(df, ["total_assets"])
 assets_fallback = _find_column(df, ["total_assets_2"])
-equity_col = _find_column(df, ["common_equity_total", "tangible_total_equity"])
+equity_col = _find_column(df, ["common_equity_total"])
 
 if assets_primary is None and assets_fallback is None:
     raise ValueError(
-        "Could not find an assets column. Tried: total_assets, assets, total_assets_2"
+        "Could not find an assets column. Tried: total_assets or total_assets_2"
     )
 if equity_col is None:
     raise ValueError(
-        "Could not find an equity column. Tried: common_equity_total, tangible_total_equity"
+        "Could not find an equity column. Tried: common_equity_total."
     )
 
 cols = ["bank", "period_end_date", equity_col]
@@ -99,7 +112,7 @@ df = df.sort_values(["bank", "quarter"])
 df["leverage"] = df["assets"] / df["equity"]
 
 # Calculate quarterly growth rates using log differences
-# Formula: growth = 100 * ln(value_t / value_t-1) = 100 * [ln(value_t) - ln(value_t-1)]
+# Formula: growth = 100 * log(value_t / value_t-1) = 100 * [log(value_t) - log(value_t-1)]
 df["asset_growth"] = 100 * np.log(df["assets"]).groupby(df["bank"]).diff()
 df["leverage_growth"] = 100 * np.log(df["leverage"]).groupby(df["bank"]).diff()
 
@@ -114,9 +127,9 @@ print(f"Total observations: {len(df)}")
 # Create the scatter plot
 fig, ax = plt.subplots(figsize=(9, 5.5))
 
-ax.scatter(
-    df["leverage_growth"],      # x-axis
-    df["asset_growth"],          # y-axis
+ax.scatter(      
+    df["asset_growth"],  # x-axis: Total Asset Growth
+    df["leverage_growth"], # y-axis: Leverage Growth
     s=28,                        # point size
     c="#f3e21b",                 # yellow color
     edgecolors="black",          # black outline
@@ -125,9 +138,9 @@ ax.scatter(
 )
 
 # Labels and formatting
-ax.set_xlabel("Leverage Growth (percent quarterly)")
-ax.set_ylabel("Total Asset Growth (percent quarterly)")
-ax.set_title("Total Asset Growth vs Leverage Growth (Balanced Panel)")
+ax.set_xlabel("Total Leverage Growth (quarterly, %)", fontsize=12)
+ax.set_ylabel("Total Asset Growth (quarterly, %)", fontsize=12)
+ax.set_title("Asset Growth vs Leverage Growth (Balanced Panel)")
 ax.set_xlim(-10, 20)
 ax.set_ylim(-10, 20)
 ax.grid(True, linestyle="--", alpha=0.6)
