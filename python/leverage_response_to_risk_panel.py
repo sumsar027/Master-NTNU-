@@ -24,7 +24,10 @@ from sklearn import base
 BANK_MAP = {
     "bankofamerica": "bank_of_america",
     "citigroup": "citibank",
-    "wellsfargo": "wells_fargo"
+    "wellsfargo": "wells_fargo",
+    "goldman_sachs": "goldmansachs",
+    "jpmorgan_chase": "jpmorgan",
+    "morgan_stanley": "morganstanley",
 }
 
 # ============================================================================
