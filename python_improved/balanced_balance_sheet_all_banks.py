@@ -30,7 +30,9 @@ BANKS = [
     "wellsfargo",
     "goldmansachs",
     "morganstanley",
-    "keycorp"    
+    "keycorp",
+    "statestreet",
+    "bny"    
 ]
 
 # Sheet name to extract 
