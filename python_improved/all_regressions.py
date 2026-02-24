@@ -13,13 +13,15 @@ ASSET GROWTH MODELS:
 
 LEVERAGE/RISK MODELS:
   1. log(Leverage) ~ log(UnitVaR) + bank FE
-  2. log(Assets) ~ log(VaR) + bank FE
-  3. log(Equity) ~ log(VaR) + bank FE
+  2. log(Assets) ~ log(VaR) + bank FE - old
+  3. log(Equity) ~ log(VaR) + bank FE - old
   4A. log(Leverage) ~ log(UnitVaR) + LCR_{t-1} + log(UnitVaR)*LCR_{t-1} + bank FE
   4B. log(Leverage) ~ log(UnitVaR) + CET1_{t-1} + log(UnitVaR)*CET1_{t-1} + bank FE
   4C. log(Leverage) ~ log(UnitVaR) + LCR_{t-1} + CET1_{t-1}
                       + log(UnitVaR)*LCR_{t-1} + log(UnitVaR)*CET1_{t-1} + bank FE
   5. log(Leverage) ~ LCR_{t-1} + bank FE
+  6. log(Leverage) ~ log(UnitVaR) + GroupDummies + log(UnitVaR)*GroupDummies + bank FE
+     Groups: H={Goldman Sachs, Morgan Stanley}, M={JP Morgan, BoA, Citigroup}, ref={Wells Fargo, BNY, State Street}
 
 COVID MODEL:
   C1. log(Leverage) ~ log(UnitVaR) + COVID + log(UnitVaR)*COVID + bank FE
@@ -30,6 +32,7 @@ import pandas as pd
 import statsmodels.api as sm
 from linearmodels.panel import PanelOLS
 from pathlib import Path
+import re
 
 # ============================================================================
 # CONFIG
@@ -175,6 +178,39 @@ def prepare_all_variables(df):
         (df['period_end_date'] <= covid_end)
     ).astype(int)
     df['int_covid_unitvar'] = df['covid_dummy'] * df['log_unit_var']
+
+    # Bank group dummies (Model 6)
+    def _norm_bank_id(x: object) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(x).strip().lower())
+
+    bank_norm = df["bank_id"].map(_norm_bank_id)
+    group_h = {"goldmansachs", "goldmansachsgroup", "morganstanley", "morganstanleygroup"}
+    group_m = {
+        "jpmorgan",
+        "jpmorganchase",
+        "jpmorganchaseco",
+        "bankofamerica",
+        "bankofamericacorp",
+        "bofa",
+        "citigroup",
+        "citigroupinc",
+        "citi",
+    }
+    group_ref = {
+        "wellsfargo",
+        "wellsfargobank",
+        "bankofnewyorkmellon",
+        "bankofnewyork",
+        "bnymellon",
+        "statestreet",
+        "statestreetcorp",
+    }
+
+    in_any_group = bank_norm.isin(group_h | group_m | group_ref)
+    df["group_h_dummy"] = np.where(in_any_group, bank_norm.isin(group_h).astype(int), np.nan)
+    df["group_m_dummy"] = np.where(in_any_group, bank_norm.isin(group_m).astype(int), np.nan)
+    df["int_unitvar_group_h"] = df["log_unit_var"] * df["group_h_dummy"]
+    df["int_unitvar_group_m"] = df["log_unit_var"] * df["group_m_dummy"]
     
     print(f"\nVariables prepared: {len(df)} observations")
     
@@ -190,7 +226,7 @@ def run_pooled_ols(df, dep_var, indep_vars, model_name):
     if isinstance(indep_vars, str):
         indep_vars = [indep_vars]
     
-    reg_data = df[['bank_id'] + [dep_var] + indep_vars].dropna()
+    reg_data = df[['bank_id', 'period_end_date'] + [dep_var] + indep_vars].dropna()
     
     if reg_data.empty:
         return None
@@ -202,8 +238,12 @@ def run_pooled_ols(df, dep_var, indep_vars, model_name):
     result = model.fit(cov_type='cluster', cov_kwds={'groups': reg_data['bank_id']})
     
     # Extract coefficients
-    coef_dict = {'model_name': model_name, 'n_obs': int(result.nobs), 
-                 'r_squared': result.rsquared_adj}
+    coef_dict = {
+        'model_name': model_name,
+        'n_obs': int(result.nobs),
+        'n_quarters': int(reg_data['period_end_date'].nunique()),
+        'r_squared': result.rsquared_adj,
+    }
     
     for i, var in enumerate(['const'] + indep_vars):
         coef_dict[f'b_{var}'] = result.params[i]
@@ -228,7 +268,7 @@ def run_panel_fe(df, dep_var, indep_vars, model_name, bank_fe=False, time_fe=Fal
     y = panel[[dep_var]]
     X = panel[indep_vars]
     
-    model = PanelOLS(y, X, entity_effects=bank_fe, time_effects=time_fe)
+    model = PanelOLS(y, X, entity_effects=bank_fe, time_effects=time_fe, drop_absorbed=True)
     result = model.fit(cov_type='clustered', cluster_entity=True)
     
     # Extract coefficients
@@ -236,6 +276,7 @@ def run_panel_fe(df, dep_var, indep_vars, model_name, bank_fe=False, time_fe=Fal
     coef_dict = {
         'model_name': model_name,
         'n_obs': int(result.nobs),
+        'n_quarters': int(panel.index.get_level_values(1).nunique()),
         'n_banks': panel.index.get_level_values(0).nunique(),
         'r_squared': r2
     }
@@ -288,6 +329,17 @@ def run_all_models(df):
     
     res = run_panel_fe(df, 'log_leverage', 'log_unit_var', 'M1_Leverage_UnitVaR',
                        bank_fe=True, time_fe=False)
+    if res: results.append(res)
+
+    # Model 6: Bank-group dummy controls + interactions with UnitVaR (ref group: Wells Fargo + BNY + State Street)
+    res = run_panel_fe(
+        df,
+        "log_leverage",
+        ["log_unit_var", "group_h_dummy", "group_m_dummy", "int_unitvar_group_h", "int_unitvar_group_m"],
+        "M6_Leverage_GroupDummy_Interactions",
+        bank_fe=True,
+        time_fe=False,
+    )
     if res: results.append(res)
     
     res = run_panel_fe(df, 'log_total_assets', 'log_var_99_level', 'M2_Assets_VaR',
