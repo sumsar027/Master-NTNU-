@@ -184,31 +184,16 @@ def prepare_all_variables(df):
         return re.sub(r"[^a-z0-9]+", "", str(x).strip().lower())
 
     bank_norm = df["bank_id"].map(_norm_bank_id)
-    group_h = {"goldmansachs", "goldmansachsgroup", "morganstanley", "morganstanleygroup"}
+    group_h = {"goldmansachs", "morganstanley" }
     group_m = {
         "jpmorgan",
-        "jpmorganchase",
-        "jpmorganchaseco",
         "bankofamerica",
-        "bankofamericacorp",
-        "bofa",
         "citigroup",
-        "citigroupinc",
-        "citi",
-    }
-    group_ref = {
-        "wellsfargo",
-        "wellsfargobank",
-        "bankofnewyorkmellon",
-        "bankofnewyork",
-        "bnymellon",
-        "statestreet",
-        "statestreetcorp",
     }
 
-    in_any_group = bank_norm.isin(group_h | group_m | group_ref)
-    df["group_h_dummy"] = np.where(in_any_group, bank_norm.isin(group_h).astype(int), np.nan)
-    df["group_m_dummy"] = np.where(in_any_group, bank_norm.isin(group_m).astype(int), np.nan)
+    # Reference group is implicitly: banks not in H or M (i.e., both dummies = 0).
+    df["group_h_dummy"] = bank_norm.isin(group_h).astype(int)
+    df["group_m_dummy"] = bank_norm.isin(group_m).astype(int)
     df["int_unitvar_group_h"] = df["log_unit_var"] * df["group_h_dummy"]
     df["int_unitvar_group_m"] = df["log_unit_var"] * df["group_m_dummy"]
     
