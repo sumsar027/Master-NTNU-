@@ -2,7 +2,10 @@
 Balance Sheet Panel Construction Script
 
 Builds quarterly balance sheet panel data from Refinitiv Excel exports.
-Designed to be easily extensible - just add bank names to the BANKS list.
+Reads two files per bank:
+  1. data/raw/Balansesheet/<bank_id>.xlsx          - "Balance Sheet" tab
+  2. data/raw/Financial/<fin_name>_financial.xlsx  - "Financial Summary" tab
+     (only dividend fields extracted)
 
 Author: Created for master thesis analysis
 Date: 2026
@@ -12,17 +15,16 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import re
-from typing import Dict, List, Tuple
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-# Input/Output paths
-DATA_DIR = Path("data/raw/Balansesheet")
+BS_DIR     = Path("data/raw/Balansesheet")   # e.g. jpmorgan.xlsx
+FIN_DIR    = Path("data/raw/Financial")       # e.g. jp_morgan_financial.xlsx
 OUTPUT_DIR = Path("data/processed")
 
-# Bank list - expand this list to add more banks
+# Balance sheet bank_id list (filenames in Balansesheet/)
 BANKS = [
     "bankofamerica",
     "jpmorgan",
@@ -30,291 +32,242 @@ BANKS = [
     "wellsfargo",
     "goldmansachs",
     "morganstanley",
-    "keycorp",
     "statestreet",
-    "bny"    
+    "bny",
 ]
 
-# Sheet name to extract 
-SHEET_NAME = "Balance Sheet"
+# Mapping: bank_id -> filename stem in data/raw/Financial/
+FINANCIAL_FILENAMES = {
+    "bankofamerica": "bank_of_america_financial",
+    "jpmorgan":      "jp_morgan_financial",
+    "citigroup":     "citigroup_financial",
+    "wellsfargo":    "wells_fargo_financial",
+    "goldmansachs":  "goldman_sachs_financial",
+    "morganstanley": "morgan_stanley_financial",
+    "statestreet":   "statestreet_financial",
+    "bny":           "bny_financial",
+}
 
-# Output files
-OUTPUT_BALANCED = OUTPUT_DIR / "balance_sheet_panel_balanced.csv"
+BALANCE_SHEET_TAB     = "Balance Sheet"
+FINANCIAL_SUMMARY_TAB = "Financial Summary"
+
+OUTPUT_BALANCED   = OUTPUT_DIR / "balance_sheet_panel_balanced.csv"
 OUTPUT_UNBALANCED = OUTPUT_DIR / "balance_sheet_panel_unbalanced.csv"
 
 
 # ============================================================================
-# HELPER FUNCTIONS
+# HELPERS
 # ============================================================================
 
 def clean_column_name(name: str) -> str:
-    """
-    Clean and standardize column names.
-    
-    Examples:
-        'Cash & Short-Term Deposits Due from Banks - Total' 
-        -> 'cash_short_term_deposits_due_from_banks_total'
-    """
+    """Standardize a Refinitiv field name to snake_case."""
     if pd.isna(name) or not isinstance(name, str):
         return ""
-    
-    # Convert to lowercase
     name = name.lower()
-    
-    # Replace common separators with spaces
-    name = re.sub(r'[&/\-,()]+', ' ', name)
-    
-    # Remove special characters except spaces
+    name = re.sub(r'[&/\-,()%]+', ' ', name)
     name = re.sub(r'[^a-z0-9\s]+', '', name)
-    
-    # Replace multiple spaces with single space
     name = re.sub(r'\s+', ' ', name)
-    
-    # Trim and replace spaces with underscores
-    name = name.strip().replace(' ', '_')
-    
-    # Remove trailing/leading underscores
-    name = name.strip('_')
-    
-    return name
+    return name.strip().replace(' ', '_').strip('_')
 
 
-def parse_refinitiv_balance_sheet(file_path: Path) -> pd.DataFrame:
+# ============================================================================
+# PARSERS
+# ============================================================================
+
+def _parse_refinitiv_sheet(file_path: Path, sheet_name: str,
+                            field_filter: set = None) -> pd.DataFrame:
     """
-    Parse a Refinitiv Balance Sheet Excel export.
-    
-    The structure is:
-    - Row 11 (index 11): Period End Dates
-    - Row 17 (index 17): "Field Name" header with date columns
-    - Row 18+ (index 18+): Field names and data
-    
-    Returns a long-format DataFrame with columns:
-        - period_end_date: Quarter end date
-        - field_name: Balance sheet line item (cleaned)
-        - value: Numeric value
+    Parse any Refinitiv sheet with the standard layout:
+      Row 11  - Period End Dates
+      Row 18+ - Field name | values...
+
+    field_filter: if given, only keep rows where the cleaned field name
+                  contains at least one of the strings in the set.
+    Returns long-format DataFrame (period_end_date, field_name, value).
     """
-    # Read the raw Excel file
-    df_raw = pd.read_excel(file_path, sheet_name=SHEET_NAME, header=None)
-    
-    # Extract period end dates from row 11
-    dates_row = df_raw.iloc[11, 1:].copy()  # Skip first column (label)
-    dates = pd.to_datetime(dates_row, errors='coerce')
-    dates = dates.dropna()
-    
-    # Find where actual data starts (row 18 is typically "Assets")
-    data_start_row = 18
-    
-    # Extract field names (first column) and data
-    field_names = df_raw.iloc[data_start_row:, 0].copy()
-    data_values = df_raw.iloc[data_start_row:, 1:len(dates)+1].copy()
-    
-    # Reset index
-    field_names = field_names.reset_index(drop=True)
-    data_values = data_values.reset_index(drop=True)
+    df_raw = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+
+    dates = pd.to_datetime(df_raw.iloc[11, 1:], errors='coerce').dropna()
+
+    field_names = df_raw.iloc[18:, 0].reset_index(drop=True)
+    data_values = df_raw.iloc[18:, 1:len(dates) + 1].reset_index(drop=True)
     data_values.columns = range(len(data_values.columns))
-    
-    # Remove rows where field name is NaN or empty
-    valid_rows = field_names.notna() & (field_names != '')
-    field_names = field_names[valid_rows].reset_index(drop=True)
-    data_values = data_values[valid_rows].reset_index(drop=True)
-    
-    # Build long format dataframe
+
+    valid = field_names.notna() & (field_names != '')
+    field_names = field_names[valid].reset_index(drop=True)
+    data_values = data_values[valid].reset_index(drop=True)
+
     records = []
     for date_idx, date in enumerate(dates):
         if pd.isna(date):
             continue
-            
         for row_idx in range(len(field_names)):
-            field_name = field_names.iloc[row_idx]
-            value = data_values.iloc[row_idx, date_idx]
-            
-            # Skip if field name is not valid
-            if pd.isna(field_name) or field_name == '':
+            raw = field_names.iloc[row_idx]
+            if pd.isna(raw) or raw == '':
                 continue
-            
-            # Clean field name
-            clean_field = clean_column_name(field_name)
-            if not clean_field:
+            clean = clean_column_name(raw)
+            if not clean:
                 continue
-            
-            # Convert value to numeric
-            numeric_value = pd.to_numeric(value, errors='coerce')
-            
+            if field_filter and not any(f in clean for f in field_filter):
+                continue
             records.append({
                 'period_end_date': date,
-                'field_name': clean_field,
-                'original_field_name': field_name,
-                'value': numeric_value
+                'field_name':      clean,
+                'value':           pd.to_numeric(
+                    data_values.iloc[row_idx, date_idx], errors='coerce'),
             })
-    
-    df_long = pd.DataFrame(records)
-    
-    return df_long
 
+    return pd.DataFrame(records)
+
+
+def parse_balance_sheet(file_path: Path) -> pd.DataFrame:
+    """Parse all fields from the Balance Sheet tab."""
+    return _parse_refinitiv_sheet(file_path, BALANCE_SHEET_TAB)
+
+
+def parse_financial_summary(file_path: Path) -> pd.DataFrame:
+    return _parse_refinitiv_sheet(
+        file_path, FINANCIAL_SUMMARY_TAB,
+        field_filter={"dividend", "return_on_average_total_assets"}
+    )
+
+# ============================================================================
+# BANK LOADER
+# ============================================================================
 
 def load_bank_data(bank_id: str) -> pd.DataFrame:
     """
-    Load balance sheet data for a single bank.
-    
-    Returns a long-format DataFrame with bank_id added.
+    Load Balance Sheet + dividend data for one bank.
+    Balance sheet: data/raw/Balansesheet/<bank_id>.xlsx
+    Dividends:     data/raw/Financial/<fin_stem>.xlsx
     """
-    file_path = DATA_DIR / f"{bank_id}.xlsx"
-    
-    if not file_path.exists():
-        print(f"  File not found: {file_path}")
-        return pd.DataFrame()
-    
-    try:
-        df = parse_refinitiv_balance_sheet(file_path)
-        df['bank_id'] = bank_id
-        
-        print(f"  ✓ {bank_id}: {len(df['period_end_date'].unique())} quarters, "
-              f"{len(df['field_name'].unique())} fields")
-        
-        return df
-    
-    except Exception as e:
-        print(f" Error loading {bank_id}: {str(e)}")
+    bs_path  = BS_DIR  / f"{bank_id}.xlsx"
+    fin_stem = FINANCIAL_FILENAMES.get(bank_id, f"{bank_id}_financial")
+    fin_path = FIN_DIR / f"{fin_stem}.xlsx"
+
+    if not bs_path.exists():
+        print(f"  X Balance sheet not found: {bs_path}")
         return pd.DataFrame()
 
+    try:
+        df_bs = parse_balance_sheet(bs_path)
+    except Exception as e:
+        print(f"  X [{bank_id}] Balance sheet error: {e}")
+        return pd.DataFrame()
+
+    # Dividend data from separate Financial file
+    df_fin = pd.DataFrame()
+    if fin_path.exists():
+        try:
+            df_fin = parse_financial_summary(fin_path)
+        except Exception as e:
+            print(f"  ! [{bank_id}] Financial summary error: {e}")
+    else:
+        print(f"  ! [{bank_id}] Financial file not found: {fin_path}")
+
+    frames = [df_bs] + ([df_fin] if not df_fin.empty else [])
+    df = pd.concat(frames, ignore_index=True)
+    df['bank_id'] = bank_id
+
+    div_fields = sorted(df.loc[
+        df['field_name'].str.contains('dividend', na=False), 'field_name'].unique())
+    print(f"  ok {bank_id}: {df['period_end_date'].nunique()} quarters, "
+          f"{df['field_name'].nunique()} fields | dividends: {div_fields or 'none'}")
+
+    return df
+
+
+# ============================================================================
+# PANEL BUILDER
+# ============================================================================
 
 def build_panel(df_long: pd.DataFrame) -> pd.DataFrame:
-    """
-    Convert long-format data to wide panel format.
-    
-    Returns a DataFrame with:
-        - bank_id
-        - period_end_date
-        - [all balance sheet fields as columns]
-    """
-    # Pivot to wide format
+    """Pivot long-format data to wide panel."""
     df_wide = df_long.pivot_table(
         index=['bank_id', 'period_end_date'],
         columns='field_name',
         values='value',
-        aggfunc='first'  # In case of duplicates, take first
+        aggfunc='first'
     ).reset_index()
-    
-    # Clean up column names
     df_wide.columns.name = None
-    
     return df_wide
 
 
 def create_balanced_panel(df_panel: pd.DataFrame) -> pd.DataFrame:
-    """
-    Create a balanced panel containing only quarters where all banks have data.
-    """
-    # Count number of banks per quarter
-    banks_per_quarter = (
+    """Keep only quarters where ALL banks have observations."""
+    total_banks = df_panel['bank_id'].nunique()
+    complete_quarters = (
         df_panel.groupby('period_end_date')['bank_id']
         .nunique()
-        .reset_index()
-        .rename(columns={'bank_id': 'n_banks'})
+        .pipe(lambda s: s[s == total_banks])
+        .index
     )
-    
-    # Find quarters where all banks are present
-    total_banks = df_panel['bank_id'].nunique()
-    complete_quarters = banks_per_quarter[
-        banks_per_quarter['n_banks'] == total_banks
-    ]['period_end_date']
-    
-    # Filter to complete quarters
-    df_balanced = df_panel[
-        df_panel['period_end_date'].isin(complete_quarters)
-    ].copy()
-    
-    return df_balanced
+    return df_panel[df_panel['period_end_date'].isin(complete_quarters)].copy()
 
 
 # ============================================================================
-# MAIN EXECUTION
+# MAIN
 # ============================================================================
 
 def main():
-    """
-    Main execution function.
-    """
     print("=" * 70)
     print("BALANCE SHEET PANEL CONSTRUCTION")
+    print(f"  Balance sheets : {BS_DIR}")
+    print(f"  Financial data : {FIN_DIR}")
     print("=" * 70)
-    
-    print(f"\nBanks to process: {len(BANKS)}")
-    for bank in BANKS:
-        print(f"  - {bank}")
-    
-    # Create output directory
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    
-    # Load all bank data
-    print("\nLoading bank data...")
-    all_data = []
-    
-    for bank_id in BANKS:
-        df_bank = load_bank_data(bank_id)
-        if not df_bank.empty:
-            all_data.append(df_bank)
-    
+
+    print(f"\nLoading {len(BANKS)} banks...")
+    all_data = [load_bank_data(b) for b in BANKS]
+    all_data = [d for d in all_data if not d.empty]
+
     if not all_data:
-        print("\n No data loaded. Exiting.")
+        print("\nX No data loaded. Exiting.")
         return 1
-    
-    # Combine all data
-    print("\nCombining data...")
+
     df_combined = pd.concat(all_data, ignore_index=True)
-    
-    print(f"  Total observations: {len(df_combined):,}")
-    print(f"  Banks: {df_combined['bank_id'].nunique()}")
-    print(f"  Unique quarters: {df_combined['period_end_date'].nunique()}")
-    print(f"  Unique fields: {df_combined['field_name'].nunique()}")
-    
-    # Build panel
-    print("\nBuilding panel format...")
-    df_panel = build_panel(df_combined)
-    
-    print(f"  Panel shape: {df_panel.shape}")
-    print(f"  Columns: bank_id, period_end_date + {len(df_panel.columns) - 2} balance sheet fields")
-    
-    # Create balanced panel
-    print("\nCreating balanced panel...")
+    print(f"\nCombined: {len(df_combined):,} obs | "
+          f"{df_combined['bank_id'].nunique()} banks | "
+          f"{df_combined['period_end_date'].nunique()} quarters | "
+          f"{df_combined['field_name'].nunique()} fields")
+
+    # Dividend coverage report
+    div_rows = df_combined[df_combined['field_name'].str.contains('dividend', na=False)]
+    if not div_rows.empty:
+        print(f"\nDividend fields: {sorted(div_rows['field_name'].unique())}")
+        cov = div_rows.groupby(['field_name', 'bank_id'])['value'].count().unstack(fill_value=0)
+        print("\nDividend coverage (quarters per bank):")
+        print(cov.to_string())
+    else:
+        print("\n! No dividend fields found.")
+
+    # Build panels
+    df_panel    = build_panel(df_combined)
     df_balanced = create_balanced_panel(df_panel)
-    
-    print(f"  Balanced panel shape: {df_balanced.shape}")
-    print(f"  Quarters in balanced panel: {df_balanced['period_end_date'].nunique()}")
-    print(f"  Date range: {df_balanced['period_end_date'].min()} to {df_balanced['period_end_date'].max()}")
-    
-    # Display summary statistics
-    print("\nPanel coverage by bank:")
-    coverage = (
-        df_panel.groupby('bank_id')['period_end_date']
-        .agg(['count', 'min', 'max'])
-        .rename(columns={
-            'count': 'quarters',
-            'min': 'first_quarter',
-            'max': 'last_quarter'
-        })
-    )
-    print(coverage)
-    
-    # Save unbalanced panel
-    print(f"\nSaving unbalanced panel to {OUTPUT_UNBALANCED}...")
+
+    print(f"\nUnbalanced panel : {df_panel.shape}")
+    print(f"Balanced panel   : {df_balanced.shape}  "
+          f"({df_balanced['period_end_date'].nunique()} quarters, "
+          f"{df_balanced['period_end_date'].min().date()} - "
+          f"{df_balanced['period_end_date'].max().date()})")
+
+    # Coverage by bank
+    print("\nCoverage by bank:")
+    print(df_panel.groupby('bank_id')['period_end_date']
+          .agg(['count', 'min', 'max'])
+          .rename(columns={'count': 'quarters', 'min': 'first', 'max': 'last'}))
+
+    # Save
     df_panel.to_csv(OUTPUT_UNBALANCED, index=False)
-    print(f"  ✓ Saved {len(df_panel):,} rows")
-    
-    # Save balanced panel
-    print(f"\nSaving balanced panel to {OUTPUT_BALANCED}...")
+    print(f"\nok Saved unbalanced -> {OUTPUT_UNBALANCED}  ({len(df_panel):,} rows)")
+
     df_balanced.to_csv(OUTPUT_BALANCED, index=False)
-    print(f"  ✓ Saved {len(df_balanced):,} rows")
-    
-    # Summary
-    print("\n" + "=" * 70)
-    print("SUMMARY")
-    print("=" * 70)
-    print(f"Unbalanced panel: {len(df_panel):,} observations across {df_panel['period_end_date'].nunique()} quarters")
-    print(f"Balanced panel: {len(df_balanced):,} observations across {df_balanced['period_end_date'].nunique()} quarters")
-    print(f"Balance sheet fields: {len(df_panel.columns) - 2}")
-    print("\n✓ Panel construction complete!")
-    
+    print(f"ok Saved balanced   -> {OUTPUT_BALANCED}  ({len(df_balanced):,} rows)")
+
+    div_cols = [c for c in df_panel.columns if 'dividend' in c]
+    print(f"\nDividend columns in output: {div_cols}")
+    print("\nok Panel construction complete!")
     return 0
 
 
