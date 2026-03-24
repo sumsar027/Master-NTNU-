@@ -108,7 +108,7 @@ MODELS = {
         "banks":      None,
         "date_range": ("2015-Q1", "2025-Q4"),
     },
-    "M4_pre_covid": {
+    "M1A_pre_covid": {
         "y":          "d_ln_leverage",
         "X":          ["d_ln_unit_var_lag", "roa_lag", "size_lag"],
         "bank_fe":    True,
@@ -116,7 +116,7 @@ MODELS = {
         "banks":      None,
         "date_range": ("2010-Q1", "2019-Q4"),
     },
-    "M4_post_covid": {
+    "M1B_post_covid": {
         "y":          "d_ln_leverage",
         "X":          ["d_ln_unit_var_lag", "roa_lag", "size_lag"],
         "bank_fe":    True,
@@ -124,7 +124,25 @@ MODELS = {
         "banks":      None,
         "date_range": ("2020-Q1", "2025-Q4"),
     },
-    "M5_pre_covid_SLR": {
+    
+    # ── Pre/post-COVID med bankgruppe-dummies ──────────────────────────────
+    "M2A_pre_covid_dummy": {
+        "y":          "d_ln_leverage",
+        "X":          ["d_ln_unit_var_lag", "d_ln_unit_var_x_market", "d_ln_unit_var_x_custody", "size_lag", "roa_lag"],
+        "bank_fe":    True,
+        "time_fe":    True,
+        "banks":      None,
+        "date_range": ("2010-Q1", "2019-Q4"),
+    },
+    "M2B_post_covid_dummy": {
+        "y":          "d_ln_leverage",
+        "X":          ["d_ln_unit_var_lag", "d_ln_unit_var_x_market", "d_ln_unit_var_x_custody", "size_lag", "roa_lag"],
+        "bank_fe":    True,
+        "time_fe":    True,
+        "banks":      None,
+        "date_range": ("2020-Q1", "2025-Q4"),
+    },
+    "M3CA_pre_covid_SLR": {
         "y":          "d_ln_leverage",
         "X":          ["d_ln_unit_var_lag", "slr_ratio_lag", "d_ln_unit_var_x_slr", "roa_lag", "size_lag"],
         "bank_fe":    True,
@@ -132,7 +150,7 @@ MODELS = {
         "banks":      None,
         "date_range": ("2015-Q1", "2019-Q4"),
     },
-    "M5_post_covid_SLR": {
+    "M3CB_post_covid_SLR": {
         "y":          "d_ln_leverage",
         "X":          ["d_ln_unit_var_lag",  "slr_ratio_lag", "d_ln_unit_var_x_slr", "roa_lag", "size_lag"],
         "bank_fe":    True,
@@ -140,7 +158,7 @@ MODELS = {
         "banks":      None,
         "date_range": ("2020-Q1", "2025-Q4"),
     },
-    "M5_pre_covid_CET1": {
+    "M3BA_pre_covid_CET1": {
         "y":          "d_ln_leverage",
         "X":          ["d_ln_unit_var_lag", "cet1_ratio_lag", "d_ln_unit_var_x_cet1", "roa_lag", "size_lag"],
         "bank_fe":    True,
@@ -148,7 +166,7 @@ MODELS = {
         "banks":      None,
         "date_range": ("2015-Q1", "2019-Q4"),
     },
-    "M5_post_covid_CET1": {
+    "M3BB_post_covid_CET1": {
         "y":          "d_ln_leverage",
         "X":          ["d_ln_unit_var_lag",  "cet1_ratio_lag", "d_ln_unit_var_x_cet1", "roa_lag", "size_lag"],
         "bank_fe":    True,
@@ -156,7 +174,7 @@ MODELS = {
         "banks":      None,
         "date_range": ("2020-Q1", "2025-Q4"),
     },
-    "M5_pre_covid_LCR": {
+    "M3AA_pre_covid_LCR": {
         "y":          "d_ln_leverage",
         "X":          ["d_ln_unit_var_lag", "lcr_ratio_lag", "d_ln_unit_var_x_lcr", "roa_lag", "size_lag"],
         "bank_fe":    True,
@@ -164,7 +182,7 @@ MODELS = {
         "banks":      None,
         "date_range": ("2015-Q1", "2019-Q4"),
     },
-    "M5_post_covid_LCR": {
+    "M3AA_post_covid_LCR": {
         "y":          "d_ln_leverage",
         "X":          ["d_ln_unit_var_lag",  "lcr_ratio_lag", "d_ln_unit_var_x_lcr", "roa_lag", "size_lag"],
         "bank_fe":    True,
