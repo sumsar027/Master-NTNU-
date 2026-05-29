@@ -1,0 +1,158 @@
+\documentclass[a4paper, 12pt, openany]{book}
+\usepackage[utf8]{inputenc} %to manage special characters
+\usepackage[T1]{fontenc} %to manage special characters
+\usepackage[Bjarne]{fncychap} %fancy chapter style (many more available, like Sonny or Lenny etc.)
+\usepackage{fancyhdr} %to customize the headers
+\usepackage[lmargin=1.5in, rmargin=1in, tmargin=1in, bmargin=1in]{geometry} %sets the margins for the pages
+\setcounter{tocdepth}{2} %table of contents number depth for subsections (2 = x.x.x)
+\setcounter{secnumdepth}{4} %numbering depth for headers for subsections in the text
+\usepackage{threeparttable}
+\usepackage[labelfont=bf]{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\usepackage{pdflscape}
+\usepackage[section]{placeins}
+\usepackage{booktabs}  % Legg til i preamble
+\usepackage{url} %to include urls
+\usepackage{listings} %include this if you want to include code in the thesis
+\usepackage{amsmath,amssymb} %mathematical package
+\usepackage{siunitx} %includes SI-units
+\usepackage{array, booktabs} %to make better tables
+\usepackage{graphicx} %to include graphics
+\usepackage{float} %to include floats
+\usepackage[export]{adjustbox} %to adjust floats
+\usepackage{multirow}
+\usepackage{chngcntr} %will make it possible to change the counter for tables, figures etc. such as below
+\counterwithin{figure}{section} %change counter for figures within sections (also possible to choose for each chapter
+\counterwithin{table}{section} %change counter for tables within sections
+\usepackage{color, xcolor} %edit e.g. text colors
+
+\usepackage[norsk, english]{babel}
+
+\raggedbottom
+% Preamble for descreptive statestics
+
+
+\sisetup{
+   detect-all,
+   input-symbols = {()}, % hvis du har parenteser el.l.
+   group-separator = {,},
+   group-minimum-digits = 4
+ }
+\renewcommand{\arraystretch}{1.15}
+
+\usepackage[backend = biber,
+            style = authoryear,
+            date = long,
+            sorting = nyt,
+            maxcitenames = 2,
+            uniquename = false]{biblatex}
+
+\renewcommand*{\nameyeardelim}{\addcomma\space}
+\addbibresource{bibliography.bib}
+\usepackage{comment} %to be able to comment out sections in the .tex files
+\usepackage{afterpage} %to customize page commands such as below
+\newcommand\myemptypage{
+    \null
+    \thispagestyle{empty}
+    \addtocounter{page}{-1}
+    \newpage
+    } %sets new page command to insert an empty page without adding to the page counter or having a page number
+
+
+
+\begin{document}
+
+\chapter*{Abstract} %pre-chapters should not be numbered, hence the "*"
+\pagenumbering{roman} %introductory pages should be roman
+\setcounter{page}{1}
+\addcontentsline{toc}{chapter}{\protect\numberline{}Abstract} %add the chapter to the table of contents, this is not automatically added when creating unnumbered chapters (*). Add it in a chapter style, and keep all chapters on the same numberline indent regardless of number or not on the chapter
+\input{Chapters/00Abstract} %insert the chapter text from the files
+
+\chapter*{Preface}
+\addcontentsline{toc}{chapter}{\protect\numberline{}Preface} 
+\input{Chapters/01Preface}
+
+\tableofcontents
+\addcontentsline{toc}{chapter}{\protect\numberline{}Contents}
+
+%add to table of contents list of figures and tables, and insert list of figures and tables
+\addcontentsline{toc}{chapter}{\protect\numberline{}\listfigurename}
+\listoffigures
+\addcontentsline{toc}{chapter}{\protect\numberline{}\listtablename}
+\listoftables
+
+
+\chapter*{Abbreviations}
+\addcontentsline{toc}{chapter}{\protect\numberline{}Abbreviations}
+\input{Chapters/02Abbreviations}
+\newpage
+\myemptypage
+%add an empty non-counted page by the command below in order to get the first chapter on the left hand side, if needed (check your page number so that the first chapter is on an odd page)
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Customize the layout of the main content of your thesis
+
+\pagestyle{fancy} %set customized page style for header
+\fancyhf{} %clear header and footer fields
+\renewcommand{\headrulewidth}{0pt} %set to no rule
+\fancyhead[LE, RO]{\thepage} %set the page number at left for even, right for odd pages
+\fancyhead[RE, LO]{\leftmark} %set the chapter name at right for even, left for odd pages
+%is is possible to design the header with the chapter as you wish, e.q. only the chapter or only the name, all lowercase instead etc.
+%you could also design the footer if you wish, for example:
+%\fancyfoot[LE, RO]{\thepage}
+\setlength{\headheight}{14.49998pt} %set the header height
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%main content 
+
+\pagenumbering{arabic}
+\chapter{Introduction}
+\input{Chapters/03Introduction}
+\clearpage
+
+
+\chapter{Literature Review}
+\input{Chapters/04Literature Review}
+\clearpage
+
+\chapter{Theory}
+\input{Chapters/05Theory}
+\clearpage
+
+
+\chapter{Methods}
+\input{Chapters/06Method}
+\clearpage
+
+
+\chapter{Analysis and Results}
+\input{Chapters/07Analysis and Results}
+\clearpage
+
+
+\chapter{Discussion}
+\input{Chapters/08Discussion}
+\clearpage
+
+\addcontentsline{toc}{chapter}{\protect\numberline{}References}
+\printbibliography[title={References}] 
+\addcontentsline{toc}{chapter}{\protect\numberline{}AI Usage}
+\input{Chapters/10Data and AI Usage}
+\clearpage
+
+\chapter*{\LARGE \textbf{Appendices}}
+\fancyhf{} 
+\renewcommand{\headrulewidth}{0pt}
+\fancyfoot[C]{\thepage} 
+
+
+\addcontentsline{toc}{chapter}{\protect\numberline{}Appendices:}
+\appendix
+\input{Chapters/11Appendix}
+
+
+\end{document}
