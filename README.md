@@ -20,7 +20,7 @@ This folder contains balance sheet data used in the empirical analysis. These da
 
 ### CashFlows
 
-This folder contains cash flow data downloaded and prepared for the analysis.
+This folder contains cash flow data that was downloaded and prepared for analysis.
 
 ### FinancialSummary
 
@@ -32,7 +32,7 @@ This folder contains data and supporting material related to the U.S. Global Sys
 
 ### IncomeStatement
 
-This folder contains income statement data used as part of the broader bank-level dataset.
+This folder contains income statement data used in the broader bank-level dataset.
 
 ### Latex
 
@@ -40,11 +40,11 @@ This folder contains LaTeX-related files used in the writing and formatting of t
 
 ### RStudio
 
-This folder contains R scripts used for data cleaning, data structuring, descriptive statistics, figures, and regression analysis.
+This folder contains R scripts for data cleaning, data structuring, descriptive statistics, figure generation, and regression analysis.
 
 ### VIX
 
-This folder contains data related to the VIX index, which is used as a broader market risk indicator.
+This folder contains data on the VIX index, a broader market risk indicator.
 
 ### VaR
 
@@ -52,23 +52,23 @@ This folder contains the manually collected Value-at-Risk data. The VaR figures 
 
 ### balancesheetv2
 
-This folder contains an updated version of the balance sheet data used during the data preparation process.
+This folder contains an updated version of the balance sheet data used during data preparation.
 
-### python, python_improved, python_may, and python_v3
+### Python
 
-These folders contain Python scripts and working files used at different stages of the data collection and data cleaning process. Some scripts were exploratory, while others were used to improve or automate parts of the workflow.
+This folder contains Python scripts and working files used at various stages of data collection and cleaning. Some scripts were exploratory, while others were used to improve or automate parts of the workflow.
 
 ## Data Sources
 
 The VaR data were collected manually from the banks’ own quarterly and annual reports, mainly 10-Q and 10-K filings. These reports were accessed through the SEC EDGAR database.
 
-Data related to capital structure, balance sheet composition, liquidity measures, and regulatory ratios were collected from Refinitiv LSEG, using access provided by NTNU Business School.
+Data on capital structure, balance sheet composition, liquidity measures, and regulatory ratios were collected from Refinitiv LSEG using access provided by NTNU Business School.
 
 After collection, the data were cleaned, structured, and combined before being used in the empirical analysis.
 
 ## Notes on Reproducibility
 
-The repository includes the datasets and code used in the thesis. However, some files may reflect different stages of the working process, including earlier versions, exploratory scripts, and updated data structures. The final empirical analysis is based on the cleaned and combined datasets described in the thesis.
+The repository includes the datasets and code used in the thesis. However, some files may represent different stages of the workflow, including earlier versions, exploratory scripts, and updated data structures. The final empirical analysis is based on the cleaned and combined datasets described in the thesis.
 
 ## Authors
 
